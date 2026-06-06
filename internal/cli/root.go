@@ -54,5 +54,6 @@ Running 'lint' with no subcommand checks the current directory.`,
 	root.AddCommand(newNewCmd())
 	root.AddCommand(newLangsCmd())
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newInitCmd())
 	return root
 }
