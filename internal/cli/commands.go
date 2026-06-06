@@ -9,10 +9,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/eriklanning/lintel/internal/dsl"
-	"github.com/eriklanning/lintel/internal/engine"
-	"github.com/eriklanning/lintel/internal/lang"
-	"github.com/eriklanning/lintel/internal/runner"
+	"github.com/ichigo-labs/lintel/internal/dsl"
+	"github.com/ichigo-labs/lintel/internal/engine"
+	"github.com/ichigo-labs/lintel/internal/lang"
+	"github.com/ichigo-labs/lintel/internal/runner"
 )
 
 // --- test ----------------------------------------------------------------

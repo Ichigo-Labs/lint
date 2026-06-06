@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/eriklanning/lintel/internal/dsl"
-	"github.com/eriklanning/lintel/internal/engine"
-	"github.com/eriklanning/lintel/internal/lang"
+	"github.com/ichigo-labs/lintel/internal/dsl"
+	"github.com/ichigo-labs/lintel/internal/engine"
+	"github.com/ichigo-labs/lintel/internal/lang"
 )
 
 // LoadError records a rule file that failed to parse or compile.

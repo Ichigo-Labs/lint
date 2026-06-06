@@ -5,7 +5,7 @@
 BIN      := lintel
 PKG      := ./cmd/lintel
 VERSION  ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
-LDFLAGS  := -X github.com/eriklanning/lintel/internal/cli.version=$(VERSION)
+LDFLAGS  := -X github.com/ichigo-labs/lintel/internal/cli.version=$(VERSION)
 
 export CGO_ENABLED := 1
 

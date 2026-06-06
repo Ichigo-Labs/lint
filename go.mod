@@ -1,4 +1,4 @@
-module github.com/eriklanning/lintel
+module github.com/ichigo-labs/lintel
 
 go 1.26.4
 

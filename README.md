@@ -6,7 +6,7 @@ them across C, C++, C#, Go, Java, Python, Rust, and TypeScript/JavaScript — on
 rule language for every codebase.
 
 It is a modern, multi-language, AST-based successor to
-[checkr](https://github.com/eriklanning/checkr): same "write a project lint rule
+[checkr](https://github.com/ichigo-labs/checkr): same "write a project lint rule
 in a minute" spirit, but matching is structural (over a Tree-sitter parse tree)
 instead of line-by-line regex.
 
@@ -44,7 +44,7 @@ lintel embeds Tree-sitter grammars, so building it needs **Go and a C compiler
 with CGO enabled**.
 
 ```bash
-git clone https://github.com/eriklanning/lintel
+git clone https://github.com/ichigo-labs/lintel
 cd lintel
 CGO_ENABLED=1 go build -o lintel ./cmd/lintel
 ```

@@ -3,7 +3,7 @@ package engine
 import (
 	sitter "github.com/smacker/go-tree-sitter"
 
-	"github.com/eriklanning/lintel/internal/dsl"
+	"github.com/ichigo-labs/lintel/internal/dsl"
 )
 
 // find produces all candidate matches for a matcher across a tree. Only

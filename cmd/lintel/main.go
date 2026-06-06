@@ -2,7 +2,7 @@
 // rules written in the .lint DSL.
 package main
 
-import "github.com/eriklanning/lintel/internal/cli"
+import "github.com/ichigo-labs/lintel/internal/cli"
 
 func main() {
 	cli.Execute()

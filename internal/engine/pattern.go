@@ -7,7 +7,7 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 
-	"github.com/eriklanning/lintel/internal/lang"
+	"github.com/ichigo-labs/lintel/internal/lang"
 )
 
 type metaKind int

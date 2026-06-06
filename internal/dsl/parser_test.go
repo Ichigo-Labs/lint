@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eriklanning/lintel/internal/dsl"
+	"github.com/ichigo-labs/lintel/internal/dsl"
 )
 
 // --- helpers -------------------------------------------------------------

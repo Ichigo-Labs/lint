@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/eriklanning/lintel/internal/dsl"
-	"github.com/eriklanning/lintel/internal/engine"
+	"github.com/ichigo-labs/lintel/internal/dsl"
+	"github.com/ichigo-labs/lintel/internal/engine"
 )
 
 // Style controls colorized output.

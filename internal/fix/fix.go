@@ -5,7 +5,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/eriklanning/lintel/internal/engine"
+	"github.com/ichigo-labs/lintel/internal/engine"
 )
 
 // Result summarizes an apply pass.

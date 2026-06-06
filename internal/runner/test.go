@@ -1,8 +1,8 @@
 package runner
 
 import (
-	"github.com/eriklanning/lintel/internal/dsl"
-	"github.com/eriklanning/lintel/internal/engine"
+	"github.com/ichigo-labs/lintel/internal/dsl"
+	"github.com/ichigo-labs/lintel/internal/engine"
 )
 
 // CaseResult is the outcome of one inline rule test case.

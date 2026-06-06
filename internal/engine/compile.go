@@ -8,8 +8,8 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 
-	"github.com/eriklanning/lintel/internal/dsl"
-	"github.com/eriklanning/lintel/internal/lang"
+	"github.com/ichigo-labs/lintel/internal/dsl"
+	"github.com/ichigo-labs/lintel/internal/lang"
 )
 
 // Match is a single structural hit: a span of source plus captured bindings.

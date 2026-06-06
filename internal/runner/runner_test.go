@@ -6,8 +6,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/eriklanning/lintel/internal/dsl"
-	"github.com/eriklanning/lintel/internal/engine"
+	"github.com/ichigo-labs/lintel/internal/dsl"
+	"github.com/ichigo-labs/lintel/internal/engine"
 )
 
 // writeFile creates path's parent directories and writes content.
