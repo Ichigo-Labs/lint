@@ -116,6 +116,7 @@ lint parse --lang go --pattern 'fmt.Println($$$)'   # see how a pattern compiles
 lint parse main.go                 # dump a file's syntax tree (find node kinds)
 lint new my-rule --lang go         # scaffold a new rule
 lint langs                         # list supported languages
+lint version                       # print version, commit, and build info
 ```
 
 ### How rules are discovered

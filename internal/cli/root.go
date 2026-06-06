@@ -8,8 +8,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// defaultVersion is used for un-stamped builds (a plain `go build`); release
+// builds override `version` via -ldflags. See version.go for how commit and
+// build date are resolved.
+const defaultVersion = "0.1.0-dev"
+
 // version is overridden at build time with -ldflags.
-var version = "0.1.0-dev"
+var version = defaultVersion
 
 // Execute runs the lint CLI.
 func Execute() {
@@ -36,7 +41,9 @@ Running 'lint' with no subcommand checks the current directory.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCheck(cmd, args)
 		},
-		Version: version,
+		// `lint --version` prints a one-line summary; `lint version` prints the
+		// full build details.
+		Version: readBuildInfo().short(),
 	}
 	addCheckFlags(root)
 
@@ -46,5 +53,6 @@ Running 'lint' with no subcommand checks the current directory.`,
 	root.AddCommand(newParseCmd())
 	root.AddCommand(newNewCmd())
 	root.AddCommand(newLangsCmd())
+	root.AddCommand(newVersionCmd())
 	return root
 }
