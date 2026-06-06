@@ -6,6 +6,26 @@ import (
 	"github.com/ichigo-labs/lint/internal/dsl"
 )
 
+// Index is a per-file, pre-order node index shared across all rules checking
+// one parsed tree. Building it once (one walk) lets every single-pattern rule
+// scan only the nodes of its root kind instead of re-walking the whole tree.
+type Index struct {
+	byType map[string][]*sitter.Node // node kind -> nodes, in pre-order
+	all    []*sitter.Node            // every node, in pre-order
+}
+
+// BuildIndex walks a parsed tree once and records its nodes by kind. The
+// pre-order traversal exactly matches walk(), so iterating the index is
+// equivalent to (but cheaper than) re-walking and filtering per rule.
+func BuildIndex(tree *sitter.Tree) *Index {
+	idx := &Index{byType: map[string][]*sitter.Node{}}
+	walk(tree.RootNode(), func(n *sitter.Node) {
+		idx.byType[n.Type()] = append(idx.byType[n.Type()], n)
+		idx.all = append(idx.all, n)
+	})
+	return idx
+}
+
 // find produces all candidate matches for a matcher across a tree. Only
 // "positive" matchers (pattern/query/any/all) can generate candidates.
 func (cm *compiledMatcher) find(ctx *matchCtx, root *sitter.Node) []Match {
@@ -67,7 +87,7 @@ func (cm *compiledMatcher) findSingle(ctx *matchCtx, root *sitter.Node) []Match 
 	want := cm.pattern.root.Type()
 	_, rootIsMeta := cm.pattern.metaOf(cm.pattern.root)
 	var out []Match
-	walk(root, func(n *sitter.Node) {
+	visit := func(n *sitter.Node) {
 		if !rootIsMeta && n.Type() != want {
 			return
 		}
@@ -75,14 +95,23 @@ func (cm *compiledMatcher) findSingle(ctx *matchCtx, root *sitter.Node) []Match 
 		if ctx.matchNode(cm.pattern.root, n, b) {
 			out = append(out, mkMatch(n, b))
 		}
-	})
+	}
+	// A single-kind pattern (the common case) scans only its bucket; otherwise
+	// fall back to a full walk (identical pre-order, so identical results).
+	if ctx.index != nil && !rootIsMeta {
+		for _, n := range ctx.index.byType[want] {
+			visit(n)
+		}
+	} else {
+		walk(root, visit)
+	}
 	return out
 }
 
 func (cm *compiledMatcher) findSeq(ctx *matchCtx, root *sitter.Node) []Match {
 	ctx.pat = cm.pattern
 	var out []Match
-	walk(root, func(n *sitter.Node) {
+	visit := func(n *sitter.Node) {
 		if n.NamedChildCount() == 0 {
 			return
 		}
@@ -103,7 +132,14 @@ func (cm *compiledMatcher) findSeq(ctx *matchCtx, root *sitter.Node) []Match {
 				})
 			}
 		}
-	})
+	}
+	if ctx.index != nil {
+		for _, n := range ctx.index.all {
+			visit(n)
+		}
+	} else {
+		walk(root, visit)
+	}
 	return out
 }
 

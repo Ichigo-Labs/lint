@@ -297,6 +297,136 @@ func TestRulesDirOverride(t *testing.T) {
 	}
 }
 
+// TestInlineSuppression checks that lint:ignore / lint:ignore-next-line comments
+// silence findings on the targeted line, by rule id or for all rules.
+func TestInlineSuppression(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	writeFile(t, filepath.Join(root, ".lint", "r.lint"), `rule no_panic {
+  in go
+  pattern { panic($$$) }
+}`)
+	writeFile(t, filepath.Join(root, ".lint", "todo.lint"), `rule no_todo {
+  in go
+  pattern { TODO($$$) }
+}`)
+	writeFile(t, filepath.Join(root, "a.go"), `package p
+func f() {
+	panic(1) // lint:ignore no_panic
+	panic(2)
+	// lint:ignore-next-line
+	panic(3)
+	panic(4) // lint:ignore
+	panic(5) // lint:ignore other_rule
+	panic(6); TODO() // lint:ignore no_panic , no_todo because legacy
+}
+`)
+	t.Chdir(root)
+	rs, _, err := Load(".", "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	res, err := rs.Check(Options{Paths: []string{"."}})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	// Suppressed: panic(1) by id, panic(3) by next-line, panic(4) by bare ignore,
+	// and both panic(6)+TODO() by a spaced, comma-separated list with a trailing
+	// explanation. Not suppressed: panic(2), and panic(5) (different rule named).
+	var lines []int
+	for _, f := range res.Findings {
+		lines = append(lines, f.StartLine)
+	}
+	sort.Ints(lines)
+	if len(lines) != 2 || lines[0] != 4 || lines[1] != 8 {
+		t.Fatalf("remaining finding lines = %v, want [4 8]", lines)
+	}
+}
+
+// TestProjectConfig checks that .lint.toml disables a rule and overrides another
+// rule's severity.
+func TestProjectConfig(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	writeFile(t, filepath.Join(root, ".lint", "r.lint"), `rule no_panic {
+  in go
+  severity error
+  pattern { panic($$$) }
+}
+rule no_todo {
+  in go
+  pattern { TODO($$$) }
+}`)
+	writeFile(t, filepath.Join(root, ".lint.toml"), `[project]
+disable = ["no_todo"]
+
+[rules.no_panic]
+severity = "warning"
+`)
+	writeFile(t, filepath.Join(root, "a.go"), `package p
+func f() {
+	panic(1)
+	TODO()
+}
+`)
+	t.Chdir(root)
+	rs, _, err := Load(".", "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	res, err := rs.Check(Options{Paths: []string{"."}})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(res.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1 (no_todo disabled): %v", len(res.Findings), collectKeys(res.Findings))
+	}
+	f := res.Findings[0]
+	if f.RuleID != "no_panic" {
+		t.Fatalf("RuleID = %q, want no_panic", f.RuleID)
+	}
+	if f.Severity != dsl.Warning {
+		t.Fatalf("Severity = %q, want overridden warning", f.Severity)
+	}
+}
+
+// TestTagFilter checks that Options.TagFilter restricts which rules run.
+func TestTagFilter(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	writeFile(t, filepath.Join(root, ".lint", "r.lint"), `rule no_panic {
+  in go
+  tags safety
+  pattern { panic($$$) }
+}
+rule no_todo {
+  in go
+  tags style
+  pattern { TODO($$$) }
+}`)
+	writeFile(t, filepath.Join(root, "a.go"), "package p\nfunc f() { panic(1); TODO() }\n")
+	t.Chdir(root)
+	rs, _, err := Load(".", "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	res, err := rs.Check(Options{Paths: []string{"."}, TagFilter: map[string]bool{"safety": true}})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	got := collectKeys(res.Findings)
+	want := []string{"a.go|no_panic"}
+	if !equalStrings(got, want) {
+		t.Fatalf("tag-filtered findings = %v, want %v", got, want)
+	}
+}
+
 // TestRunRuleTests checks that inline test { ... } cases are evaluated, covering
 // match, no_match, an exact `count`, and a deliberately failing case.
 func TestRunRuleTests(t *testing.T) {

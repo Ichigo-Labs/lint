@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
 
@@ -31,6 +33,8 @@ type Finding struct {
 	Message  string
 	Severity dsl.Severity
 	Note     string
+	URL      string
+	Tags     []string
 	File     string
 
 	StartByte, EndByte  uint32
@@ -48,11 +52,23 @@ type CompiledRule struct {
 	Message  string
 	Note     string
 	Severity dsl.Severity
+	URL      string
+	Tags     []string
 	Fix      *string
 
 	langs  []*lang.Language
 	byLang map[string]*langRule
 	raw    *dsl.Rule
+}
+
+// HasTag reports whether the rule carries the given tag.
+func (r *CompiledRule) HasTag(tag string) bool {
+	for _, t := range r.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }
 
 // Languages returns the languages this rule applies to.
@@ -85,6 +101,7 @@ type compiledConstraint struct {
 	set     map[string]bool
 	re      *regexp.Regexp
 	matcher *compiledMatcher
+	num     float64 // parsed threshold for numeric/count constraints
 }
 
 type compiledRelation struct {
@@ -101,6 +118,8 @@ func Compile(r *dsl.Rule) (*CompiledRule, error) {
 		Message:  r.Message,
 		Note:     r.Note,
 		Severity: r.Severity,
+		URL:      r.URL,
+		Tags:     r.Tags,
 		Fix:      r.Fix,
 		byLang:   map[string]*langRule{},
 		raw:      r,
@@ -243,6 +262,14 @@ func compileConstraint(l *lang.Language, c dsl.Constraint) (compiledConstraint, 
 			return cc, err
 		}
 		cc.matcher = m
+	case dsl.ConNumGt, dsl.ConNumGe, dsl.ConNumLt, dsl.ConNumLe,
+		dsl.ConCountGt, dsl.ConCountGe, dsl.ConCountLt, dsl.ConCountLe,
+		dsl.ConCountEq, dsl.ConCountNe:
+		n, err := strconv.ParseFloat(c.Text, 64)
+		if err != nil {
+			return cc, fmt.Errorf("invalid number %q in where constraint: %w", c.Text, err)
+		}
+		cc.num = n
 	}
 	return cc, nil
 }
@@ -256,13 +283,21 @@ func ParseSource(l *lang.Language, src []byte) (*sitter.Tree, error) {
 	return parser.ParseCtx(context.Background(), nil, src)
 }
 
-// Run executes the rule against a parsed file for a specific language.
+// Run executes the rule against a parsed file for a specific language. It builds
+// a one-off node index; callers checking many rules against the same tree should
+// share one via RunIndexed.
 func (r *CompiledRule) Run(l *lang.Language, tree *sitter.Tree, src []byte) []Finding {
+	return r.RunIndexed(l, tree, src, BuildIndex(tree))
+}
+
+// RunIndexed is Run with a caller-supplied per-file node index, so a tree is
+// walked once for a whole ruleset instead of once per rule.
+func (r *CompiledRule) RunIndexed(l *lang.Language, tree *sitter.Tree, src []byte, idx *Index) []Finding {
 	lr, ok := r.byLang[l.Name]
 	if !ok {
 		return nil
 	}
-	ctx := &matchCtx{l: l, tsrc: src}
+	ctx := &matchCtx{l: l, tsrc: src, index: idx}
 	root := tree.RootNode()
 
 	candidates := lr.root.find(ctx, root)
@@ -274,6 +309,7 @@ func (r *CompiledRule) Run(l *lang.Language, tree *sitter.Tree, src []byte) []Fi
 		if b == nil {
 			b = Bindings{}
 		}
+		bindMatch(b, m, src)
 		if !lr.passesRelations(ctx, m, b) {
 			continue
 		}
@@ -296,12 +332,32 @@ func (r *CompiledRule) Run(l *lang.Language, tree *sitter.Tree, src []byte) []Fi
 	return findings
 }
 
+// bindMatch exposes the whole matched span to where/relations/message/fix as the
+// implicit metavariable $match, mirroring the @match capture a query already
+// provides. It never overwrites an existing binding (a user capture literally
+// named "match", or a query's own @match/@target), so explicit captures win. The
+// node is recorded only when the span is exactly one node, so `where $match kind`
+// / `is` behave sensibly (a statement-sequence or query-cover span has no single
+// node, like a variadic).
+func bindMatch(b Bindings, m Match, src []byte) {
+	if _, ok := b["match"]; ok {
+		return
+	}
+	bv := Binding{Text: string(src[m.StartByte:m.EndByte])}
+	if m.Node != nil && m.Node.StartByte() == m.StartByte && m.Node.EndByte() == m.EndByte {
+		bv.Node = m.Node
+	}
+	b["match"] = bv
+}
+
 func (r *CompiledRule) toFinding(m Match, b Bindings, src []byte) Finding {
 	f := Finding{
 		RuleID:    r.ID,
 		Message:   expandTemplate(r.Message, b),
 		Severity:  r.Severity,
 		Note:      r.Note,
+		URL:       r.URL,
+		Tags:      r.Tags,
 		StartByte: m.StartByte,
 		EndByte:   m.EndByte,
 		StartLine: int(m.StartPoint.Row) + 1,
@@ -353,9 +409,129 @@ func (lr *langRule) passesRelations(ctx *matchCtx, m Match, b Bindings) bool {
 			if ok, _ := matchDescendant(ctx, rel.matcher, m.Node, b); ok {
 				return false
 			}
+		case dsl.RelPrecedes:
+			ok, nb := matchSibling(ctx, rel.matcher, m.Node, b, true)
+			if !ok {
+				return false
+			}
+			b.merge(nb)
+		case dsl.RelNotPrecedes:
+			if ok, _ := matchSibling(ctx, rel.matcher, m.Node, b, true); ok {
+				return false
+			}
+		case dsl.RelFollows:
+			ok, nb := matchSibling(ctx, rel.matcher, m.Node, b, false)
+			if !ok {
+				return false
+			}
+			b.merge(nb)
+		case dsl.RelNotFollows:
+			if ok, _ := matchSibling(ctx, rel.matcher, m.Node, b, false); ok {
+				return false
+			}
+		case dsl.RelDirectlyInside:
+			ok, nb := matchDirectParent(ctx, rel.matcher, m.Node, b)
+			if !ok {
+				return false
+			}
+			b.merge(nb)
+		case dsl.RelNotDirectlyInside:
+			if ok, _ := matchDirectParent(ctx, rel.matcher, m.Node, b); ok {
+				return false
+			}
+		case dsl.RelDirectlyHas:
+			ok, nb := matchDirectChild(ctx, rel.matcher, m.Node, b)
+			if !ok {
+				return false
+			}
+			b.merge(nb)
+		case dsl.RelNotDirectlyHas:
+			if ok, _ := matchDirectChild(ctx, rel.matcher, m.Node, b); ok {
+				return false
+			}
 		}
 	}
 	return true
+}
+
+// matchSibling looks for a sibling of the candidate's statement, on the given
+// side (before=earlier, else later), that the matcher accepts. It scopes the
+// search to the candidate's lowest enclosing block: it finds the ancestor whose
+// parent is a block and compares that ancestor's siblings there. This looks
+// through statement wrappers (a call inside an expression_statement reaches its
+// block) without spilling into outer blocks.
+func matchSibling(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindings, before bool) (bool, Bindings) {
+	stmt, block := enclosingStatement(n)
+	if block == nil {
+		return false, nil
+	}
+	sibs := relevantChildren(block, ctx.l)
+	idx := indexOfNode(sibs, stmt)
+	if idx < 0 {
+		return false, nil
+	}
+	if before {
+		for i := idx - 1; i >= 0; i-- {
+			if nb, ok := cm.matchesNode(ctx, sibs[i], seed); ok {
+				return true, nb
+			}
+		}
+	} else {
+		for i := idx + 1; i < len(sibs); i++ {
+			if nb, ok := cm.matchesNode(ctx, sibs[i], seed); ok {
+				return true, nb
+			}
+		}
+	}
+	return false, nil
+}
+
+// enclosingStatement returns the candidate's statement node (the ancestor that
+// sits directly inside a block) and that block. Returns nil if the candidate has
+// no enclosing block.
+func enclosingStatement(n *sitter.Node) (stmt, block *sitter.Node) {
+	for a := n; a != nil; a = a.Parent() {
+		p := a.Parent()
+		if p == nil {
+			return nil, nil
+		}
+		if blockKinds[p.Type()] {
+			return a, p
+		}
+	}
+	return nil, nil
+}
+
+// indexOfNode finds target in nodes by span and kind (pointer identity is not
+// guaranteed across tree-sitter node lookups).
+func indexOfNode(nodes []*sitter.Node, target *sitter.Node) int {
+	for i, n := range nodes {
+		if n.StartByte() == target.StartByte() && n.EndByte() == target.EndByte() && n.Type() == target.Type() {
+			return i
+		}
+	}
+	return -1
+}
+
+// matchDirectParent tests the candidate's immediate parent against the matcher.
+func matchDirectParent(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindings) (bool, Bindings) {
+	parent := n.Parent()
+	if parent == nil {
+		return false, nil
+	}
+	nb, ok := cm.matchesNode(ctx, parent, seed)
+	return ok, nb
+}
+
+// matchDirectChild tests the candidate's immediate (relevant) children against
+// the matcher — a depth-1 version of matchDescendant.
+func matchDirectChild(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindings) (bool, Bindings) {
+	for _, c := range relevantChildren(n, ctx.l) {
+		if nb, ok := cm.matchesNode(ctx, c, seed); ok {
+			return true, nb
+		}
+	}
+	return false, nil
 }
 
 // matchAncestor walks up from n (exclusive) looking for an ancestor the matcher
@@ -440,6 +616,38 @@ func (c compiledConstraint) eval(ctx *matchCtx, b Bindings) bool {
 		}
 		_, ok := matchNodeOrDescendant(ctx, c.matcher, bv.Node, b)
 		return !ok
+	case dsl.ConNumGt, dsl.ConNumGe, dsl.ConNumLt, dsl.ConNumLe:
+		v, err := strconv.ParseFloat(strings.TrimSpace(bv.Text), 64)
+		if err != nil {
+			return false // a non-numeric capture never satisfies a numeric bound
+		}
+		return cmpNum(c.kind, v, c.num)
+	case dsl.ConCountGt, dsl.ConCountGe, dsl.ConCountLt, dsl.ConCountLe,
+		dsl.ConCountEq, dsl.ConCountNe:
+		n := 1 // a single capture counts as one node
+		if bv.Variadic {
+			n = bv.Count
+		}
+		return cmpNum(c.kind, float64(n), c.num)
+	}
+	return false
+}
+
+// cmpNum applies a numeric/count comparison constraint.
+func cmpNum(kind dsl.ConstraintKind, a, b float64) bool {
+	switch kind {
+	case dsl.ConNumGt, dsl.ConCountGt:
+		return a > b
+	case dsl.ConNumGe, dsl.ConCountGe:
+		return a >= b
+	case dsl.ConNumLt, dsl.ConCountLt:
+		return a < b
+	case dsl.ConNumLe, dsl.ConCountLe:
+		return a <= b
+	case dsl.ConCountEq:
+		return a == b
+	case dsl.ConCountNe:
+		return a != b
 	}
 	return false
 }

@@ -12,7 +12,7 @@ import (
 // contain explicit `rule <id> { ... }` blocks, or a single bare rule whose
 // fields appear at top level (its id defaults to the file's base name).
 func Parse(file, src string) ([]*Rule, error) {
-	p := &parser{lex: newLexer(file, src), file: file}
+	p := &parser{lex: newLexer(file, src), file: file, lets: map[string]*LetDef{}}
 	return p.parseFile()
 }
 
@@ -28,6 +28,7 @@ func ParseFile(path string) ([]*Rule, error) {
 type parser struct {
 	lex  *lexer
 	file string
+	lets map[string]*LetDef // file-level `let` definitions, resolved in `where`
 }
 
 func (p *parser) defaultID() string {
@@ -76,6 +77,10 @@ func tokName(k tokKind) string {
 // --- top level -----------------------------------------------------------
 
 func (p *parser) parseFile() ([]*Rule, error) {
+	// File-level `let` definitions may lead the file.
+	if err := p.consumeLets(); err != nil {
+		return nil, err
+	}
 	t, err := p.peek()
 	if err != nil {
 		return nil, err
@@ -92,6 +97,13 @@ func (p *parser) parseFile() ([]*Rule, error) {
 			}
 			if t.kind == tEOF {
 				return rules, nil
+			}
+			// `let` definitions may also appear between rule blocks.
+			if t.kind == tIdent && t.val == "let" {
+				if err := p.parseLet(); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			if t.kind != tIdent || t.val != "rule" {
 				return nil, p.lex.errf(t.pos, "expected another 'rule' block or end of file, got %s", t)
@@ -112,6 +124,57 @@ func (p *parser) parseFile() ([]*Rule, error) {
 		return nil, err
 	}
 	return []*Rule{r}, nil
+}
+
+// consumeLets parses any leading `let` definitions at the top of the file.
+func (p *parser) consumeLets() error {
+	for {
+		t, err := p.peek()
+		if err != nil {
+			return err
+		}
+		if t.kind != tIdent || t.val != "let" {
+			return nil
+		}
+		if err := p.parseLet(); err != nil {
+			return err
+		}
+	}
+}
+
+// parseLet parses `let NAME = [a, b, "c"]` or `let NAME = "regex"`.
+func (p *parser) parseLet() error {
+	p.next() // 'let'
+	name, err := p.expect(tIdent)
+	if err != nil {
+		return err
+	}
+	if _, err := p.expect(tEq); err != nil {
+		return err
+	}
+	t, err := p.peek()
+	if err != nil {
+		return err
+	}
+	var def *LetDef
+	switch t.kind {
+	case tLBrack:
+		list, err := p.parseBracketList()
+		if err != nil {
+			return err
+		}
+		def = &LetDef{List: list, Pos: name.pos}
+	case tString:
+		s, err := p.parseStringValue()
+		if err != nil {
+			return err
+		}
+		def = &LetDef{IsRegex: true, Text: s, Pos: name.pos}
+	default:
+		return p.lex.errf(t.pos, "expected '[ ... ]' or a \"regex\" after 'let %s =', got %s", name.val, t)
+	}
+	p.lets[name.val] = def
+	return nil
 }
 
 func (p *parser) parseRuleBlock() (*Rule, error) {
@@ -204,6 +267,18 @@ func (p *parser) parseField(r *Rule, acc *ruleAcc, name string) error {
 			return err
 		}
 		r.Languages = append(r.Languages, langs...)
+	case "url", "link":
+		s, err := p.parseStringValue()
+		if err != nil {
+			return err
+		}
+		r.URL = s
+	case "tag", "tags":
+		tags, err := p.parseIdentList()
+		if err != nil {
+			return err
+		}
+		r.Tags = append(r.Tags, tags...)
 	case "pattern":
 		body, err := p.lex.readRawBody()
 		if err != nil {
@@ -223,44 +298,46 @@ func (p *parser) parseField(r *Rule, acc *ruleAcc, name string) error {
 		}
 		acc.matchers = append(acc.matchers, m)
 	case "not":
-		// not inside / not has / not <matcher>
+		// not inside / not has / not precedes / not follows /
+		// not directly inside / not directly has / not <matcher>
 		nt, err := p.peek()
 		if err != nil {
 			return err
 		}
-		if nt.kind == tIdent && nt.val == "inside" {
-			p.next()
-			m, err := p.parseMatcher()
-			if err != nil {
-				return err
+		if nt.kind == tIdent {
+			switch nt.val {
+			case "inside":
+				p.next()
+				return p.addRelation(r, RelNotInside, kw.pos)
+			case "has":
+				p.next()
+				return p.addRelation(r, RelNotHas, kw.pos)
+			case "precedes":
+				p.next()
+				return p.addRelation(r, RelNotPrecedes, kw.pos)
+			case "follows":
+				p.next()
+				return p.addRelation(r, RelNotFollows, kw.pos)
+			case "directly":
+				p.next()
+				return p.addDirectlyRelation(r, kw.pos, true)
 			}
-			r.Relations = append(r.Relations, Relation{Kind: RelNotInside, Matcher: m, Pos: kw.pos})
-		} else if nt.kind == tIdent && nt.val == "has" {
-			p.next()
-			m, err := p.parseMatcher()
-			if err != nil {
-				return err
-			}
-			r.Relations = append(r.Relations, Relation{Kind: RelNotHas, Matcher: m, Pos: kw.pos})
-		} else {
-			m, err := p.parseMatcher()
-			if err != nil {
-				return err
-			}
-			acc.matchers = append(acc.matchers, &Matcher{Kind: MatchNot, Sub: m, Pos: kw.pos})
 		}
+		m, err := p.parseMatcher()
+		if err != nil {
+			return err
+		}
+		acc.matchers = append(acc.matchers, &Matcher{Kind: MatchNot, Sub: m, Pos: kw.pos})
 	case "inside":
-		m, err := p.parseMatcher()
-		if err != nil {
-			return err
-		}
-		r.Relations = append(r.Relations, Relation{Kind: RelInside, Matcher: m, Pos: kw.pos})
+		return p.addRelation(r, RelInside, kw.pos)
 	case "has":
-		m, err := p.parseMatcher()
-		if err != nil {
-			return err
-		}
-		r.Relations = append(r.Relations, Relation{Kind: RelHas, Matcher: m, Pos: kw.pos})
+		return p.addRelation(r, RelHas, kw.pos)
+	case "precedes":
+		return p.addRelation(r, RelPrecedes, kw.pos)
+	case "follows":
+		return p.addRelation(r, RelFollows, kw.pos)
+	case "directly":
+		return p.addDirectlyRelation(r, kw.pos, false)
 	case "where":
 		c, err := p.parseConstraint()
 		if err != nil {
@@ -281,6 +358,41 @@ func (p *parser) parseField(r *Rule, acc *ruleAcc, name string) error {
 		return p.lex.errf(kw.pos, "unknown field %q", name)
 	}
 	return nil
+}
+
+// addRelation parses the matcher after a relation keyword and records it.
+func (p *parser) addRelation(r *Rule, kind RelationKind, pos Position) error {
+	m, err := p.parseMatcher()
+	if err != nil {
+		return err
+	}
+	r.Relations = append(r.Relations, Relation{Kind: kind, Matcher: m, Pos: pos})
+	return nil
+}
+
+// addDirectlyRelation parses `directly inside`/`directly has` (the `directly`
+// keyword has already been consumed). neg selects the negated form.
+func (p *parser) addDirectlyRelation(r *Rule, pos Position, neg bool) error {
+	dt, err := p.expect(tIdent)
+	if err != nil {
+		return err
+	}
+	var kind RelationKind
+	switch dt.val {
+	case "inside":
+		kind = RelDirectlyInside
+		if neg {
+			kind = RelNotDirectlyInside
+		}
+	case "has":
+		kind = RelDirectlyHas
+		if neg {
+			kind = RelNotDirectlyHas
+		}
+	default:
+		return p.lex.errf(dt.pos, "expected 'inside' or 'has' after 'directly', got %q", dt.val)
+	}
+	return p.addRelation(r, kind, pos)
 }
 
 func (p *parser) finishRule(r *Rule) error {
@@ -372,6 +484,42 @@ func (p *parser) parseCombinator(kw token, name string) (*Matcher, error) {
 
 // --- constraints ---------------------------------------------------------
 
+// numConstraintKind maps a comparison token to the numeric `where $X <op> n`
+// constraint kind. Only the ordering operators reach here; equality on a number
+// is handled by the existing text `==`/`!=`.
+func numConstraintKind(k tokKind) ConstraintKind {
+	switch k {
+	case tGt:
+		return ConNumGt
+	case tGe:
+		return ConNumGe
+	case tLt:
+		return ConNumLt
+	default: // tLe
+		return ConNumLe
+	}
+}
+
+// countConstraintKind maps a comparison token to the `where $X count <op> n`
+// constraint kind, reporting false for a non-comparison token.
+func countConstraintKind(k tokKind) (ConstraintKind, bool) {
+	switch k {
+	case tGt:
+		return ConCountGt, true
+	case tGe:
+		return ConCountGe, true
+	case tLt:
+		return ConCountLt, true
+	case tLe:
+		return ConCountLe, true
+	case tEqEq:
+		return ConCountEq, true
+	case tBangEq:
+		return ConCountNe, true
+	}
+	return 0, false
+}
+
 func (p *parser) parseConstraint() (Constraint, error) {
 	mv, err := p.expect(tMeta)
 	if err != nil {
@@ -383,6 +531,8 @@ func (p *parser) parseConstraint() (Constraint, error) {
 		return c, err
 	}
 	switch op.kind {
+	case tEq:
+		return c, p.lex.errf(op.pos, "expected '==' (single '=' is not valid)")
 	case tEqEq, tBangEq:
 		rhs, err := p.next()
 		if err != nil {
@@ -405,10 +555,31 @@ func (p *parser) parseConstraint() (Constraint, error) {
 			return c, p.lex.errf(rhs.pos, "expected $var or string after comparison, got %s", rhs)
 		}
 		return c, nil
+	case tLt, tGt, tLe, tGe:
+		num, err := p.expect(tNumber)
+		if err != nil {
+			return c, err
+		}
+		c.Kind, c.Text = numConstraintKind(op.kind), num.val
+		return c, nil
 	case tIdent:
 		switch op.val {
+		case "count":
+			cmp, err := p.next()
+			if err != nil {
+				return c, err
+			}
+			k, ok := countConstraintKind(cmp.kind)
+			if !ok {
+				return c, p.lex.errf(cmp.pos, "expected a comparison (==, !=, <, <=, >, >=) after 'count', got %s", cmp)
+			}
+			num, err := p.expect(tNumber)
+			if err != nil {
+				return c, err
+			}
+			c.Kind, c.Text = k, num.val
 		case "matches":
-			s, err := p.parseStringValue()
+			s, err := p.parseRegexValue()
 			if err != nil {
 				return c, err
 			}
@@ -420,7 +591,7 @@ func (p *parser) parseConstraint() (Constraint, error) {
 			}
 			c.Kind, c.Text = ConKind, id.val
 		case "in":
-			list, err := p.parseBracketList()
+			list, err := p.parseInList()
 			if err != nil {
 				return c, err
 			}
@@ -452,7 +623,7 @@ func (p *parser) parseConstraint() (Constraint, error) {
 			}
 			switch nt.val {
 			case "matches":
-				s, err := p.parseStringValue()
+				s, err := p.parseRegexValue()
 				if err != nil {
 					return c, err
 				}
@@ -464,7 +635,7 @@ func (p *parser) parseConstraint() (Constraint, error) {
 				}
 				c.Kind, c.Text = ConNotKind, id.val
 			case "in":
-				list, err := p.parseBracketList()
+				list, err := p.parseInList()
 				if err != nil {
 					return c, err
 				}
@@ -529,6 +700,57 @@ func (p *parser) parseTestBlock(r *Rule) error {
 }
 
 // --- small value parsers -------------------------------------------------
+
+// parseInList reads the right-hand side of `in`: either a `[ ... ]` literal or a
+// `@NAME` reference to a list-valued `let` definition.
+func (p *parser) parseInList() ([]string, error) {
+	t, err := p.peek()
+	if err != nil {
+		return nil, err
+	}
+	if t.kind == tAt {
+		p.next()
+		def, err := p.lookupLet(t)
+		if err != nil {
+			return nil, err
+		}
+		if def.IsRegex {
+			return nil, p.lex.errf(t.pos, "let @%s is a regex; `in` needs a list", t.val)
+		}
+		return def.List, nil
+	}
+	return p.parseBracketList()
+}
+
+// parseRegexValue reads the right-hand side of `matches`: either a string or a
+// `@NAME` reference to a regex-valued `let` definition.
+func (p *parser) parseRegexValue() (string, error) {
+	t, err := p.peek()
+	if err != nil {
+		return "", err
+	}
+	if t.kind == tAt {
+		p.next()
+		def, err := p.lookupLet(t)
+		if err != nil {
+			return "", err
+		}
+		if !def.IsRegex {
+			return "", p.lex.errf(t.pos, "let @%s is a list; `matches` needs a regex", t.val)
+		}
+		return def.Text, nil
+	}
+	return p.parseStringValue()
+}
+
+// lookupLet resolves a @NAME reference, erroring if it is undefined.
+func (p *parser) lookupLet(at token) (*LetDef, error) {
+	def, ok := p.lets[at.val]
+	if !ok {
+		return nil, p.lex.errf(at.pos, "undefined let @%s (define it with `let %s = ...`)", at.val, at.val)
+	}
+	return def, nil
+}
 
 func (p *parser) parseStringValue() (string, error) {
 	t, err := p.next()

@@ -110,6 +110,165 @@ func f() int {
 	wantN(t, fs, 2)
 }
 
+func TestOperatorMetavar(t *testing.T) {
+	// $OP captures the operator; back-reference on $A finds identical operands.
+	rule := "rule r { in go\n pattern { $A $OP $A } }"
+	fs := run(t, "go", rule, `
+package p
+func f(a, b int) {
+	_ = a - a
+	_ = a + b
+	_ = b & b
+}`)
+	wantN(t, fs, 2) // a-a and b&b, not a+b
+	if fs[0].Bindings["OP"] != "-" {
+		t.Fatalf("first $OP = %q, want -", fs[0].Bindings["OP"])
+	}
+	if fs[1].Bindings["OP"] != "&" {
+		t.Fatalf("second $OP = %q, want &", fs[1].Bindings["OP"])
+	}
+}
+
+func TestOperatorMetavarInFilter(t *testing.T) {
+	// constrain the captured operator to a set (quoted, since == is not an ident)
+	rule := "rule r { in go\n pattern { $X $OP $Y }\n where $OP in [\"==\", \"!=\"] }"
+	fs := run(t, "go", rule, `
+package p
+func f(a, b int) bool {
+	if a == b {
+		return true
+	}
+	if a < b {
+		return false
+	}
+	return a != b
+}`)
+	wantN(t, fs, 2) // == and !=, not <
+}
+
+func TestMatchBindingPattern(t *testing.T) {
+	// $match exposes the whole matched span to where and message.
+	rule := "rule r { in go\n pattern { panic($$$) }\n where $match matches \"boom\" }"
+	fs := run(t, "go", rule, `
+package main
+func f() {
+	panic("boom")
+	panic("ok")
+}`)
+	wantN(t, fs, 1)
+	if fs[0].Bindings["match"] != `panic("boom")` {
+		t.Fatalf("$match = %q, want %q", fs[0].Bindings["match"], `panic("boom")`)
+	}
+}
+
+func TestMatchBindingDoesNotClobberQueryMatch(t *testing.T) {
+	// A query's own @match capture must not be overwritten by the implicit one.
+	rule := "rule r { in go\n query \"(call_expression function: (identifier) @match (#eq? @match \\\"panic\\\"))\" }"
+	fs := run(t, "go", rule, "package main\nfunc f() { panic(\"x\") }")
+	wantN(t, fs, 1)
+	if fs[0].Bindings["match"] != "panic" {
+		t.Fatalf("query @match = %q, want %q (implicit $match must not clobber it)", fs[0].Bindings["match"], "panic")
+	}
+}
+
+func TestWhereCount(t *testing.T) {
+	// calls passing more than two arguments
+	rule := "rule r { in go\n pattern { foo($$$ARGS) }\n where $ARGS count > 2 }"
+	fs := run(t, "go", rule, `
+package main
+func f() {
+	foo(1, 2)
+	foo(1, 2, 3)
+	foo(1, 2, 3, 4)
+	foo()
+}`)
+	wantN(t, fs, 2)
+}
+
+func TestWhereCountZero(t *testing.T) {
+	// empty argument lists
+	rule := "rule r { in go\n pattern { foo($$$ARGS) }\n where $ARGS count == 0 }"
+	fs := run(t, "go", rule, "package main\nfunc f() { foo(); foo(1) }")
+	wantN(t, fs, 1)
+	if fs[0].Snippet != "foo()" {
+		t.Fatalf("got %q", fs[0].Snippet)
+	}
+}
+
+func TestWhereNumeric(t *testing.T) {
+	// numeric literal above a threshold; a non-numeric capture never matches
+	rule := "rule r { in go\n pattern { wait($N) }\n where $N > 1000 }"
+	fs := run(t, "go", rule, `
+package main
+func f() {
+	wait(500)
+	wait(2000)
+	wait(1000)
+	wait(x)
+}`)
+	wantN(t, fs, 1)
+	if fs[0].Snippet != "wait(2000)" {
+		t.Fatalf("got %q", fs[0].Snippet)
+	}
+}
+
+func TestIndexedMatchesWalk(t *testing.T) {
+	// The shared-index path must produce byte-identical findings to the full-walk
+	// fallback for single patterns, operator patterns, and statement sequences.
+	code := `
+package p
+func f(a, b int) {
+	panic("x")
+	a = a
+	c := a + b
+	d := a - b
+	e := 0
+	e = 1
+	e = 2
+	_ = c
+	_ = d
+	_ = e
+}`
+	rules := []string{
+		"rule r { in go\n pattern { panic($$$) } }",
+		"rule r { in go\n pattern { $X = $X } }",
+		"rule r { in go\n pattern { $A $OP $B } }",
+		"rule r { in go\n pattern { $Y = $_\n $Y = $_ } }",
+	}
+	l, _ := lang.Get("go")
+	for _, src := range rules {
+		rs, err := dsl.Parse("t.lint", src)
+		if err != nil {
+			t.Fatalf("parse %q: %v", src, err)
+		}
+		cr, err := Compile(rs[0])
+		if err != nil {
+			t.Fatalf("compile %q: %v", src, err)
+		}
+		tree, err := ParseSource(l, []byte(code))
+		if err != nil {
+			t.Fatal(err)
+		}
+		withIdx := cr.RunIndexed(l, tree, []byte(code), BuildIndex(tree))
+		noIdx := cr.RunIndexed(l, tree, []byte(code), nil) // nil index -> walk fallback
+		if !sameSpans(withIdx, noIdx) {
+			t.Errorf("indexed vs walk differ for %q:\n indexed=%v\n walk=%v", src, snippets(withIdx), snippets(noIdx))
+		}
+	}
+}
+
+func sameSpans(a, b []Finding) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].StartByte != b[i].StartByte || a[i].EndByte != b[i].EndByte {
+			return false
+		}
+	}
+	return true
+}
+
 func TestMultiLangAll(t *testing.T) {
 	// No `in` clause: should compile for languages that can parse it.
 	rule := "rule r { pattern { foo($$$) } }"
@@ -124,6 +283,13 @@ func TestMultiLangAll(t *testing.T) {
 	if len(cr.Languages()) < 5 {
 		t.Fatalf("expected the call pattern to compile for many languages, got %d", len(cr.Languages()))
 	}
+}
+
+func TestLetResolution(t *testing.T) {
+	// A `let` list referenced via @NAME behaves like an inline `in [...]`.
+	rule := "let M = [log, debug]\nrule r { in typescript\n pattern { console.$X($$$) }\n where $X in @M }"
+	fs := run(t, "typescript", rule, "console.log(1);\nconsole.debug(2);\nconsole.error(3);\n")
+	wantN(t, fs, 2)
 }
 
 func TestPython(t *testing.T) {

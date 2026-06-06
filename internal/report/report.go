@@ -185,6 +185,8 @@ type jsonFinding struct {
 	Severity  string            `json:"severity"`
 	Message   string            `json:"message"`
 	Note      string            `json:"note,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Tags      []string          `json:"tags,omitempty"`
 	File      string            `json:"file"`
 	StartLine int               `json:"startLine"`
 	StartCol  int               `json:"startColumn"`
@@ -204,6 +206,8 @@ func JSON(w io.Writer, findings []engine.Finding) error {
 			Severity:  string(f.Severity),
 			Message:   f.Message,
 			Note:      f.Note,
+			URL:       f.URL,
+			Tags:      f.Tags,
 			File:      f.File,
 			StartLine: f.StartLine,
 			StartCol:  f.StartCol,

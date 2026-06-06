@@ -11,6 +11,7 @@ type Binding struct {
 	Node     *sitter.Node // captured node (nil for variadic captures)
 	Text     string       // captured source text
 	Variadic bool
+	Count    int // number of nodes a variadic captured (0 for single captures)
 }
 
 // Bindings maps metavariable names to their captures.
@@ -32,9 +33,10 @@ func (b Bindings) merge(other Bindings) {
 
 // matchCtx carries the immutable inputs of a single match attempt.
 type matchCtx struct {
-	pat  *Pattern
-	tsrc []byte
-	l    *lang.Language
+	pat   *Pattern
+	tsrc  []byte
+	l     *lang.Language
+	index *Index // optional per-file node index (shared across a file's rules)
 }
 
 func (c *matchCtx) ttext(n *sitter.Node) string { return n.Content(c.tsrc) }
@@ -106,7 +108,7 @@ func (c *matchCtx) matchExact(pats, tgts []*sitter.Node, b Bindings) bool {
 						continue
 					}
 				} else {
-					b2[spec.name] = Binding{Text: txt, Variadic: true}
+					b2[spec.name] = Binding{Text: txt, Variadic: true, Count: k}
 				}
 			}
 			if c.matchExact(pats[1:], tgts[k:], b2) {
@@ -150,7 +152,7 @@ func (c *matchCtx) matchPrefix(pats, tgts []*sitter.Node, b Bindings) (int, bool
 						continue
 					}
 				} else {
-					b2[spec.name] = Binding{Text: txt, Variadic: true}
+					b2[spec.name] = Binding{Text: txt, Variadic: true, Count: k}
 				}
 			}
 			if rest, ok := c.matchPrefix(pats[1:], tgts[k:], b2); ok {

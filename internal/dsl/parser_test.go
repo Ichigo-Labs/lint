@@ -234,6 +234,41 @@ rule aliases {
 	}
 }
 
+// --- let definitions and metadata ---------------------------------------
+
+func TestLetAndMetadata(t *testing.T) {
+	src := `
+let DEBUG = [log, debug]
+let ERRRE = "(?i)err"
+
+rule r {
+  in go
+  url  "https://example.com/x"
+  tags cleanup, debug
+  pattern { fmt.$M($$$) }
+  where $M in @DEBUG
+  where $M matches @ERRRE
+}
+`
+	r := parseOne(t, src)
+	if r.URL != "https://example.com/x" {
+		t.Errorf("URL = %q", r.URL)
+	}
+	if !eqStrings(r.Tags, []string{"cleanup", "debug"}) {
+		t.Errorf("Tags = %v", r.Tags)
+	}
+	if len(r.Where) != 2 {
+		t.Fatalf("Where len = %d, want 2", len(r.Where))
+	}
+	// @DEBUG resolves to a ConIn list; @ERRRE resolves to a ConRegex.
+	if r.Where[0].Kind != dsl.ConIn || !eqStrings(r.Where[0].List, []string{"log", "debug"}) {
+		t.Errorf("Where[0] = %+v", r.Where[0])
+	}
+	if r.Where[1].Kind != dsl.ConRegex || r.Where[1].Text != "(?i)err" {
+		t.Errorf("Where[1] = %+v", r.Where[1])
+	}
+}
+
 // --- pattern body forms --------------------------------------------------
 
 func TestPatternBodyForms(t *testing.T) {
@@ -384,6 +419,26 @@ func TestWhereOperators(t *testing.T) {
 				t.Errorf("Matcher = %+v", c.Matcher)
 			}
 		}},
+		{"num_gt", `where $x > 5`, func(t *testing.T, c dsl.Constraint) {
+			if c.Kind != dsl.ConNumGt || c.Text != "5" {
+				t.Errorf("got %+v", c)
+			}
+		}},
+		{"num_le_float", `where $x <= 3.5`, func(t *testing.T, c dsl.Constraint) {
+			if c.Kind != dsl.ConNumLe || c.Text != "3.5" {
+				t.Errorf("got %+v", c)
+			}
+		}},
+		{"count_gt", `where $x count > 3`, func(t *testing.T, c dsl.Constraint) {
+			if c.Kind != dsl.ConCountGt || c.Text != "3" {
+				t.Errorf("got %+v", c)
+			}
+		}},
+		{"count_eq", `where $x count == 0`, func(t *testing.T, c dsl.Constraint) {
+			if c.Kind != dsl.ConCountEq || c.Text != "0" {
+				t.Errorf("got %+v", c)
+			}
+		}},
 		{"is_query", `where $x is query "(identifier) @x"`, func(t *testing.T, c dsl.Constraint) {
 			if c.Kind != dsl.ConPattern {
 				t.Fatalf("Kind = %v", c.Kind)
@@ -456,6 +511,39 @@ rule rel {
 		}
 		if rel.Matcher.Pattern != wantPats[i] {
 			t.Errorf("Relations[%d].Matcher.Pattern = %q, want %q", i, rel.Matcher.Pattern, wantPats[i])
+		}
+	}
+}
+
+func TestRelationsSiblingAndDirect(t *testing.T) {
+	src := `
+rule rel {
+  pattern { foo() }
+  precedes pattern { a() }
+  follows pattern { b() }
+  not precedes pattern { c() }
+  not follows pattern { d() }
+  directly inside pattern { e() }
+  directly has pattern { g() }
+  not directly inside pattern { h() }
+  not directly has pattern { i() }
+}
+`
+	r := parseOne(t, src)
+	wantKinds := []dsl.RelationKind{
+		dsl.RelPrecedes, dsl.RelFollows, dsl.RelNotPrecedes, dsl.RelNotFollows,
+		dsl.RelDirectlyInside, dsl.RelDirectlyHas, dsl.RelNotDirectlyInside, dsl.RelNotDirectlyHas,
+	}
+	if len(r.Relations) != len(wantKinds) {
+		t.Fatalf("Relations len = %d, want %d", len(r.Relations), len(wantKinds))
+	}
+	wantPats := []string{"a()", "b()", "c()", "d()", "e()", "g()", "h()", "i()"}
+	for i, rel := range r.Relations {
+		if rel.Kind != wantKinds[i] {
+			t.Errorf("Relations[%d].Kind = %v, want %v", i, rel.Kind, wantKinds[i])
+		}
+		if rel.Matcher == nil || rel.Matcher.Pattern != wantPats[i] {
+			t.Errorf("Relations[%d].Matcher = %+v, want pattern %q", i, rel.Matcher, wantPats[i])
 		}
 	}
 }
@@ -804,6 +892,21 @@ func TestMalformedInputs(t *testing.T) {
 			name:     "unknown_constraint_operator",
 			src:      `rule r { pattern { foo($x) } where $x frobnicate "y" }`,
 			contains: "unknown constraint operator",
+		},
+		{
+			name:     "undefined_let",
+			src:      `rule r { pattern { foo($x) } where $x in @NOPE }`,
+			contains: "undefined let",
+		},
+		{
+			name:     "let_list_used_as_regex",
+			src:      "let L = [a, b]\nrule r { pattern { foo($x) } where $x matches @L }",
+			contains: "is a list",
+		},
+		{
+			name:     "let_regex_used_as_list",
+			src:      "let R = \"x\"\nrule r { pattern { foo($x) } where $x in @R }",
+			contains: "is a regex",
 		},
 		{
 			name:     "rule_missing_id",

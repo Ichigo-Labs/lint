@@ -105,16 +105,19 @@ directly inside it — discovery is not recursive into that directory).
 | --- | --- |
 | Structural matching | Patterns match the AST, so whitespace/comments don't, but operators do |
 | One DSL, many languages | The same `.lint` syntax targets all supported languages |
-| Metavariables | `$NAME` (named, back-referencing), `$_` (wildcard), `$$$NAME` (variadic) |
-| `where` predicates | Constrain captures by regex, node kind, membership, equality, or a sub-pattern |
-| Structural context | `inside` / `has` (and `not inside` / `not has`) filter by surrounding code |
+| Metavariables | `$NAME` (named, back-referencing), `$_` (wildcard), `$$$NAME` (variadic), `$OP` (operator), implicit `$match` |
+| `where` predicates | Constrain captures by regex, node kind, membership, equality, **numeric** bounds, variadic **`count`**, or a sub-pattern |
+| `let` definitions | Name a list/regex once (`let DEBUG = [...]`) and reuse it as `@DEBUG` across rules |
+| Structural context | `inside` / `has`, ordering `precedes` / `follows`, depth-1 `directly inside` / `directly has` (each with `not`) |
 | `any` / `all` / `not` | Combine matchers with boolean logic |
 | Raw queries | Drop to a Tree-sitter s-expression `query "..."` when patterns aren't enough |
 | Autofix | `fix "..."` templates rewritten by `lint check --fix` |
 | Inline tests | `test { match ... no_match ... }` run by `lint test` |
-| Severities | `error`, `warning`, `info`; `--quiet`, `--error-on-warning` control exit code |
-| JSON output | `--json` for editor/CI integration |
-| Parallel + scoped | `-j` workers; `.lint/` discovery scopes rules to subtrees |
+| Suppression | `// lint:ignore [rule]` and `// lint:ignore-next-line` comments silence findings |
+| Project config | `.lint.toml` disables rules or overrides severity per project |
+| Severities & tags | `error`/`warning`/`info`; `url`/`tags` metadata; `--tag`, `--quiet`, `--error-on-warning` |
+| JSON output | `--json` for editor/CI integration (includes `url`, `tags`) |
+| Parallel + scoped | `-j` workers, one tree walk per file shared across rules; `.lint/` scopes rules to subtrees |
 | Polyglot rules | Omit `in` and a rule compiles for every language whose grammar accepts it |
 
 ## Supported languages

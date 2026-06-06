@@ -21,6 +21,7 @@ type checkFlags struct {
 	applyFix       bool
 	quiet          bool
 	langs          []string
+	tags           []string
 	jobs           int
 	errorOnWarning bool
 }
@@ -33,6 +34,7 @@ func addCheckFlags(cmd *cobra.Command) {
 	f.Bool("fix", false, "apply autofixes to the working tree")
 	f.BoolP("quiet", "q", false, "only show error-severity findings")
 	f.StringSlice("lang", nil, "restrict to these languages (e.g. go,typescript)")
+	f.StringSlice("tag", nil, "only run rules carrying one of these tags")
 	f.IntP("jobs", "j", 0, "number of files to check in parallel (default: CPU count)")
 	f.Bool("error-on-warning", false, "exit non-zero if any warnings are found")
 }
@@ -45,9 +47,10 @@ func readCheckFlags(cmd *cobra.Command) checkFlags {
 	applyFix, _ := f.GetBool("fix")
 	quiet, _ := f.GetBool("quiet")
 	langs, _ := f.GetStringSlice("lang")
+	tags, _ := f.GetStringSlice("tag")
 	jobs, _ := f.GetInt("jobs")
 	eow, _ := f.GetBool("error-on-warning")
-	return checkFlags{rules, jsonOut, noColor, applyFix, quiet, langs, jobs, eow}
+	return checkFlags{rules, jsonOut, noColor, applyFix, quiet, langs, tags, jobs, eow}
 }
 
 func newCheckCmd() *cobra.Command {
@@ -97,10 +100,16 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	tagFilter := map[string]bool{}
+	for _, t := range flags.tags {
+		tagFilter[t] = true
+	}
+
 	res, err := rs.Check(runner.Options{
 		Paths:       paths,
 		Concurrency: flags.jobs,
 		LangFilter:  langFilter,
+		TagFilter:   tagFilter,
 	})
 	if err != nil {
 		return err

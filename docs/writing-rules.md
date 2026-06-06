@@ -206,14 +206,17 @@ convenient way to write multi-line snippets; common indentation is stripped.
 
 ## Known limitations and gotchas
 
-- **No operator/keyword metavariables.** You cannot capture an operator with a
-  pattern — `$A $OP $B` is not valid code and fails to compile. To match "any
-  comparison operator," use a raw `query` over `binary_expression`.
+- **Operator metavariables are `$OP` only, in operator position.** `$A $OP $B`
+  captures any binary/comparison operator (the names `$OP`, `$OP1`, … are
+  reserved for this). It binds the operator as text — constrain it with quoted
+  values (`where $OP in ["==", "!="]`), not bare ones. `$OP` outside operator
+  position (`foo($OP)`) fails to compile, and the placeholder is binary, so it
+  matches binary/comparison nodes (in Python, `comparison_operator`). For
+  anything more exotic, drop to a raw `query` over the operator node.
 
   ```
   $ lint parse --lang go --pattern '$A $OP $B'
-  lint: pattern is not valid go:
-    $A $OP $B
+  kind: binary_expression
   ```
 
 - **Bare metavariable patterns are rejected.** `pattern { $X }` would match every
@@ -228,8 +231,12 @@ convenient way to write multi-line snippets; common indentation is stripped.
   unaffected and work everywhere.)
 
 - **`kind` and `is` need a single node.** A variadic capture (`$$$NAME`) binds
-  text, not a node, so `where $$$X kind ...` is always false and
-  `where $$$X not kind ...` always true. Use `kind`/`is` on `$NAME` captures.
+  text, not a node. In a `where` clause you reference it with a single `$`
+  (`$NAME`, not `$$$NAME`), and `where $NAME kind ...` is always false (it has no
+  single node) while `where $NAME not kind ...` is always true. What *does* work
+  on a variadic: text predicates (`matches`, `in`, `==`) and `count` (its node
+  count, e.g. `where $ARGS count > 3`). Use `kind`/`is` on `$NAME` single
+  captures.
 
 - **`where` on an unbound name silently never matches.** If a `where` references
   a metavariable the pattern didn't capture (typo, or it's `$_`), the rule simply
