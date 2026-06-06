@@ -87,6 +87,48 @@ also available.
 > Building without CGO (`CGO_ENABLED=0`) will fail — the grammars are C and are
 > compiled into the binary.
 
+### Vendor a pinned `lint` into your project (`lint init`)
+
+For a team, pin an exact lint version per project — no global install needed.
+From your project root:
+
+```bash
+lint init
+```
+
+This:
+
+- writes **`bin/lint`**, a small launcher (commit it) that downloads the pinned
+  lint release for the current OS/arch on first use, verifies its SHA-256
+  checksum, caches it under `bin/.lint/`, and runs it;
+- pins the version to the lint you ran `init` with — override with
+  `lint init --version v0.2.0`. (A source/dev build has no release tag, so it
+  can't be pinned: `init` falls back to `latest` and warns — pass
+  `--version vX.Y.Z` to pin a specific release.)
+- adds `bin/.lint/` to `.gitignore` (the cache is per-machine; the launcher is
+  committed);
+- installs a git `pre-commit` hook that runs `lint check` on staged files,
+  unless a pre-commit hook already exists. (If lint can't be fetched yet — no
+  release published, or offline — the hook skips rather than blocking commits.)
+
+Commit `bin/lint`. Teammates on **Linux and macOS** then run it directly — the
+right binary is fetched automatically for their platform, so everyone is on the
+same version with nothing installed globally:
+
+```bash
+./bin/lint check      # uses the pinned version (downloaded on first run)
+./bin/lint version    # show the pinned version and build info
+```
+
+The launcher targets Linux and macOS; **Windows** teammates install lint from
+the [releases page](https://github.com/Ichigo-Labs/lint/releases) (`.zip`) — the
+hook falls back to a `lint` on their `PATH`. A `latest` pin is downloaded once
+and then cached; to move to a new release, re-run `lint init --version vX.Y.Z`
+(pinning a concrete version is recommended for reproducible builds).
+
+Flags: `--dir <dir>` (default `bin`), `--version <tag>`, `--no-hook`, and
+`--force` (overwrite an existing `bin/lint`).
+
 ## Quickstart
 
 ```bash
@@ -135,6 +177,10 @@ directly inside it — discovery is not recursive into that directory).
 
 Run lint automatically before every commit so violations never land in history.
 
+> **Tip:** [`lint init`](#vendor-a-pinned-lint-into-your-project-lint-init) sets
+> up a vendored, version-pinned `lint` *and* this hook in one step. The manual
+> options below are for when you want to wire it up yourself.
+
 By default `lint check` exits non-zero only on **error**-severity findings, so a
 hook will block a commit on errors but let warnings through. Add
 `--error-on-warning` if you want warnings to block commits too.
@@ -154,8 +200,9 @@ set -euo pipefail
 files="$(git diff --cached --name-only --diff-filter=ACM)"
 [ -z "$files" ] && exit 0
 
-# Drop --error-on-warning to block only on error-severity findings.
-echo "$files" | xargs lint check --error-on-warning
+# NUL-delimited so filenames with spaces survive. Drop --error-on-warning to
+# block only on error-severity findings.
+git diff --cached --name-only --diff-filter=ACM -z | xargs -0 lint check --error-on-warning
 ```
 
 Then point git at that tracked directory so the hook is shared with the whole
