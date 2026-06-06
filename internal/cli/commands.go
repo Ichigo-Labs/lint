@@ -68,7 +68,7 @@ func newTestCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().String("rules", "", "directory of .lint rules (default: discover .lint/)")
+	cmd.Flags().String("rules", "", "directory of .lint rules (default: the project's .lint/ directory)")
 	cmd.Flags().Bool("no-color", false, "disable colored output")
 	return cmd
 }
@@ -117,7 +117,7 @@ func newListCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().String("rules", "", "directory of .lint rules (default: discover .lint/)")
+	cmd.Flags().String("rules", "", "directory of .lint rules (default: the project's .lint/ directory)")
 	return cmd
 }
 

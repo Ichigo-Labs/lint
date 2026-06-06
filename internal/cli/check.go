@@ -28,7 +28,7 @@ type checkFlags struct {
 
 func addCheckFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
-	f.String("rules", "", "directory of .lint rules (default: discover .lint/ dirs)")
+	f.String("rules", "", "directory of .lint rules (default: the project's .lint/ directory)")
 	f.Bool("json", false, "emit findings as JSON")
 	f.Bool("no-color", false, "disable colored output")
 	f.Bool("fix", false, "apply autofixes to the working tree")

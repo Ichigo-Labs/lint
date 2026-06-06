@@ -30,9 +30,9 @@ func newRootCmd() *cobra.Command {
 		Short: "lint — write project lint rules fast, run them across many languages",
 		Long: `lint finds rule violations in your code using structural patterns.
 
-Rules live in .lint/ directories as NAME.lint files written in a small DSL
-that matches code by its syntax tree (not regex), across C#, Java, C/C++, Rust,
-Go, TypeScript, and Python.
+Rules live in a .lint/ directory at the project root as NAME.lint files written
+in a small DSL that matches code by its syntax tree (not regex), across C#, Java,
+C/C++, Rust, Go, TypeScript, and Python.
 
 Running 'lint' with no subcommand checks the current directory.`,
 		Args:          cobra.ArbitraryArgs,

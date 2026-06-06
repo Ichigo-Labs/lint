@@ -252,11 +252,11 @@ convenient way to write multi-line snippets; common indentation is stripped.
   predicates (`#eq?`, `#match?`) all live in `query "..."`. Reach for it when a
   pattern gets awkward.
 
-- **`--rules <dir>` is single-directory but global.** It loads the `.lint` files
-  directly inside that one directory (not recursively) and applies them to every
-  file you check, regardless of where that file lives. For nested, scoped layouts
-  rely on default `.lint/` discovery instead, which walks ancestors and
-  descendants and scopes each `.lint/` to its own subtree.
+- **Rules live in the project-root `.lint/`.** By default lint loads every
+  `.lint` file in the `.lint/` directory at the root you run it from and applies
+  them to every file you check. `--rules <dir>` overrides that, loading the
+  `.lint` files directly inside that one directory instead (not recursively);
+  either way the rules are global, regardless of where each checked file lives.
 
 - **Query predicates must sit inside the pattern's parentheses.** Tree-sitter
   treats a top-level `(#eq? ...)` as a separate pattern, so
