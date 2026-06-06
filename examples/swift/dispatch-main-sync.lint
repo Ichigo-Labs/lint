@@ -1,0 +1,38 @@
+rule dispatch-main-sync {
+  message  "DispatchQueue.main.sync blocks the main queue and can deadlock; dispatch asynchronously with .async instead"
+  severity warning
+  in       swift
+  note     "Calling sync on the main queue from code that is already on (or feeding into) the main thread blocks the thread waiting for itself, deadlocking the app. Use DispatchQueue.main.async, or run the work inline if you are already on the main queue."
+  any {
+    pattern { DispatchQueue.main.sync($$$) }
+    pattern { DispatchQueue.main.sync { $$$ } }
+  }
+  test {
+    match """
+func reload() {
+    DispatchQueue.main.sync {
+        self.tableView.reloadData()
+    }
+}
+"""
+    match """
+func apply(_ work: () -> Void) {
+    DispatchQueue.main.sync(execute: work)
+}
+"""
+    no_match """
+func reload() {
+    DispatchQueue.main.async {
+        self.tableView.reloadData()
+    }
+}
+"""
+    no_match """
+func compute(_ queue: DispatchQueue) {
+    queue.sync {
+        doWork()
+    }
+}
+"""
+  }
+}

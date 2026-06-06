@@ -190,6 +190,14 @@ var scaffolds = map[string][]scaffold{
 	"python": {
 		{"_ = ", ""},
 	},
+	"kotlin": {
+		{"fun _() {\n", "\n}"},
+		{"val _ = ", ""},
+	},
+	"swift": {
+		{"func _() {\n", "\n}"},
+		{"let _ = ", ""},
+	},
 	"typescript": {
 		{"function _() {\n", "\n}"},
 		{"let _ = ", ""},

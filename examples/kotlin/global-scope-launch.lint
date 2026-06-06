@@ -1,0 +1,16 @@
+rule global-scope-launch {
+  message  "GlobalScope.$M breaks structured concurrency and leaks coroutines; launch from a scoped CoroutineScope instead"
+  severity warning
+  in       kotlin
+  note     "Coroutines started on GlobalScope are not tied to any lifecycle, so they keep running after the caller is gone and their failures go unobserved. Use an injected CoroutineScope (e.g. viewModelScope, lifecycleScope, or a scope you cancel) to keep cancellation and error propagation structured."
+  pattern  { GlobalScope.$M }
+  where    $M in [launch, async]
+  test {
+    match    "fun f() { GlobalScope.launch { work() } }"
+    match    "fun f() { GlobalScope.async { compute() } }"
+    match    "fun f() { GlobalScope.launch(Dispatchers.IO) { work() } }"
+    no_match "fun f() { scope.launch { work() } }"
+    no_match "fun f() { myScope.async { compute() } }"
+    no_match "fun f() { val ctx = GlobalScope.coroutineContext }"
+  }
+}

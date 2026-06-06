@@ -308,3 +308,52 @@ fn main() {
 	// foo.unwrap() function is a field_expression, not identifier, so it won't match.
 	wantN(t, fs, 0)
 }
+
+func TestKotlinVariadic(t *testing.T) {
+	// Kotlin wraps each call argument in a value_argument node; the variadic must
+	// span those wrappers so println($$$) matches calls of any arity (incl. zero).
+	rule := "rule r { in kotlin\n pattern { println($$$) } }"
+	fs := run(t, "kotlin", rule, `
+fun f() {
+	println("a", 1)
+	println()
+	log("nope")
+}`)
+	wantN(t, fs, 2)
+}
+
+func TestKotlinNotNullAssertion(t *testing.T) {
+	// The !! operator is an anonymous token kept by relevantChildren, so $X!!
+	// matches a force-unwrap but not an ordinary reference or an increment.
+	rule := "rule r { in kotlin\n pattern { $X!! }\n }"
+	fs := run(t, "kotlin", rule, `
+fun f() {
+	val a = x!!
+	val b = y++
+	val c = z
+}`)
+	wantN(t, fs, 1)
+}
+
+func TestSwiftVariadic(t *testing.T) {
+	// Swift also wraps call arguments in value_argument nodes.
+	rule := "rule r { in swift\n pattern { print($$$) } }"
+	fs := run(t, "swift", rule, `
+func f() {
+	print("a", 1)
+	print()
+	log("nope")
+}`)
+	wantN(t, fs, 2)
+}
+
+func TestSwiftForceTryDiscriminates(t *testing.T) {
+	// try! must not match try? or a plain try (the try_operator token differs).
+	rule := "rule r { in swift\n pattern { try! $X }\n }"
+	fs := run(t, "swift", rule, `
+func f() {
+	let a = try! g()
+	let b = try? g()
+}`)
+	wantN(t, fs, 1)
+}

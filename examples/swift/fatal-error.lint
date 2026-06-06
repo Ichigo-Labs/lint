@@ -1,0 +1,13 @@
+rule fatal-error {
+  message  "avoid fatalError(...); it aborts the process — in a library, throw an error instead"
+  severity warning
+  in       swift
+  note     "fatalError unconditionally crashes the program. In reusable code prefer propagating a thrown error so callers can recover, and reserve fatalError for genuinely unrecoverable invariant violations."
+  pattern  { fatalError($$$) }
+  test {
+    match    "func load() -> Data { fatalError(\"not implemented\") }"
+    match    "func get(_ i: Int) -> Int { if i < 0 { fatalError() }; return i }"
+    no_match "func load() throws -> Data { throw LoadError.missing }"
+    no_match "func log() { print(\"not implemented\") }"
+  }
+}

@@ -1,0 +1,14 @@
+rule redundant-boolean-comparison {
+  message  "comparing `$X == true` is redundant; use `$X` directly"
+  severity info
+  in       swift
+  note     "A Bool expression compared against the literal `true` is equivalent to the expression itself. Drop the `== true` for clarity."
+  pattern  { $X == true }
+  fix      "$X"
+  test {
+    match    "func f(_ a: Bool) -> Bool { return a == true }"
+    match    "func g(_ a: Bool, _ b: Bool) -> Bool { if a == true { return b }; return b }"
+    no_match "func h(_ a: Bool) -> Bool { return a == false }"
+    no_match "func i(_ a: Bool, _ b: Bool) -> Bool { return a == b }"
+  }
+}

@@ -1,0 +1,13 @@
+rule print-stack-trace {
+  message  "$E.printStackTrace() writes to stderr and is lost in production; log the exception with a logger instead"
+  severity warning
+  in       kotlin
+  note     "printStackTrace() dumps to System.err, bypassing the application's logging configuration so the failure has no level, timestamp, or context. Pass the throwable to a logger (e.g. logger.error(\"...\", e)) instead."
+  pattern  { $E.printStackTrace() }
+  test {
+    match    "fun f() { try { work() } catch (e: Exception) { e.printStackTrace() } }"
+    match    "fun f(t: Throwable) { t.printStackTrace() }"
+    no_match "fun f(e: Exception) { logger.error(\"work failed\", e) }"
+    no_match "fun f(e: Exception, pw: java.io.PrintWriter) { e.printStackTrace(pw) }"
+  }
+}

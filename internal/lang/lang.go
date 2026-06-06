@@ -15,8 +15,10 @@ import (
 	"github.com/smacker/go-tree-sitter/csharp"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/java"
+	"github.com/smacker/go-tree-sitter/kotlin"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/rust"
+	"github.com/smacker/go-tree-sitter/swift"
 	tsx "github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
@@ -136,6 +138,23 @@ func init() {
 		identifierKinds: set("identifier", "field_identifier", "type_identifier", "shorthand_field_identifier"),
 		literalKinds:    set("integer_literal", "float_literal", "string_literal", "raw_string_literal", "char_literal", "boolean_literal"),
 		commentKinds:    set("line_comment", "block_comment"),
+	})
+	register(&Language{
+		Name:            "kotlin",
+		Aliases:         []string{"kt", "kts"},
+		Extensions:      []string{".kt", ".kts"},
+		Grammar:         kotlin.GetLanguage,
+		identifierKinds: set("simple_identifier", "type_identifier"),
+		literalKinds:    set("integer_literal", "real_literal", "hex_literal", "bin_literal", "long_literal", "unsigned_literal", "string_literal", "character_literal", "boolean_literal"),
+		commentKinds:    set("line_comment", "multiline_comment"),
+	})
+	register(&Language{
+		Name:            "swift",
+		Extensions:      []string{".swift"},
+		Grammar:         swift.GetLanguage,
+		identifierKinds: set("simple_identifier", "type_identifier"),
+		literalKinds:    set("integer_literal", "real_literal", "hex_literal", "oct_literal", "bin_literal", "line_string_literal", "multi_line_string_literal", "boolean_literal"),
+		commentKinds:    set("comment", "multiline_comment"),
 	})
 	register(&Language{
 		Name:            "typescript",

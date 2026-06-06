@@ -2,8 +2,8 @@
 
 **lint** finds bugs and bad patterns in your code by matching its *syntax
 tree*, not its text. You write small rules in a focused DSL, and lint runs
-them across C, C++, C#, Go, Java, Python, Rust, and TypeScript/JavaScript — one
-rule language for every codebase.
+them across C, C++, C#, Go, Java, Kotlin, Python, Rust, Swift, and
+TypeScript/JavaScript — one rule language for every codebase.
 
 It is a modern, multi-language, AST-based successor to
 [checkr](https://github.com/ichigo-labs/checkr): same "write a project lint rule
@@ -129,8 +129,10 @@ directly inside it — discovery is not recursive into that directory).
 | C# | `csharp` (`cs`, `c#`) | `.cs` |
 | Go | `go` (`golang`) | `.go` |
 | Java | `java` | `.java` |
+| Kotlin | `kotlin` (`kt`, `kts`) | `.kt .kts` |
 | Python | `python` (`py`) | `.py .pyi` |
 | Rust | `rust` (`rs`) | `.rs` |
+| Swift | `swift` | `.swift` |
 | TypeScript | `typescript` (`ts`) | `.ts .mts .cts` |
 | TSX / JS | `tsx` (`javascript`, `js`, `jsx`) | `.tsx .js .jsx .mjs .cjs` |
 
@@ -203,8 +205,8 @@ The `where $M in [...]` line shows a capture (`$M`, the method name) being
 constrained to a fixed set, so `console.error(...)` is *not* flagged.
 
 There are ready-to-read examples for every language under
-[`examples/`](examples/): `c/`, `cpp/`, `csharp/`, `go/`, `java/`, `python/`,
-`rust/`, and `typescript/`.
+[`examples/`](examples/): `c/`, `cpp/`, `csharp/`, `go/`, `java/`, `kotlin/`,
+`python/`, `rust/`, `swift/`, and `typescript/`.
 
 ## Documentation
 

@@ -1,0 +1,13 @@
+rule no-print {
+  message  "remove leftover print(...) debug output; use unified logging (os.Logger) instead"
+  severity warning
+  in       swift
+  note     "print writes to standard output and ships in release builds, leaking diagnostics and costing performance. Prefer os.Logger, which is structured, privacy-aware, and can be filtered or disabled."
+  pattern  { print($$$) }
+  test {
+    match    "func f() { print(\"debug value\") }"
+    match    "func f(x: Int) { print(\"x =\", x) }"
+    no_match "func f() { logger.info(\"started\") }"
+    no_match "func f() { obj.print(\"custom printer\") }"
+  }
+}

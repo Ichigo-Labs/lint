@@ -32,7 +32,8 @@ var blockKinds = map[string]bool{
 	"block":              true, // go, python, java, rust, c#
 	"statement_block":    true, // ts/tsx/js
 	"compound_statement": true, // c, c++
-	"source_file":        true, // go, rust (top level)
+	"statements":         true, // kotlin, swift
+	"source_file":        true, // go, rust, kotlin, swift (top level)
 	"module":             true, // python (top level)
 	"program":            true, // ts/js, java (top level)
 	"translation_unit":   true, // c, c++ (top level)
@@ -69,6 +70,7 @@ var paramWrapperKinds = map[string]bool{
 	"default_parameter":           true, // python
 	"typed_default_parameter":     true, // python
 	"argument":                    true, // c# call arguments
+	"value_argument":              true, // kotlin, swift call arguments
 	"literal_element":             true, // go composite-literal elements
 	"keyed_element":               true, // go keyed composite-literal elements
 	"field_initializer":           true, // rust struct-literal fields

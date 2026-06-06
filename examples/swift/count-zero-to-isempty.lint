@@ -1,0 +1,14 @@
+rule count-zero-to-isempty {
+  message  "use .isEmpty instead of comparing .count to 0"
+  severity info
+  in       swift
+  note     "$X.isEmpty reads more clearly and is O(1), whereas .count can be O(n) for some sequences. Prefer .isEmpty for emptiness checks."
+  pattern  { $X.count == 0 }
+  fix      "$X.isEmpty"
+  test {
+    match    "func f(a: [Int]) -> Bool { return a.count == 0 }"
+    match    "func g(s: String) { if s.count == 0 { print(1) } }"
+    no_match "func h(a: [Int]) -> Bool { return a.count == 1 }"
+    no_match "func i(a: [Int]) -> Bool { return a.isEmpty }"
+  }
+}

@@ -126,8 +126,10 @@ They show the range of what one short pattern can express.
 | Go | `pattern { return }` | a naked `return` |
 | Go | `pattern { panic($$$) }` | any `panic(...)` |
 | Java | `pattern { $A == $STR }` + `where $STR kind string_literal` | comparing a `String` with `==` |
+| Kotlin | `pattern { $X!! }` | a `!!` not-null assertion |
 | Python | `pattern { $X == None }` | `== None` (prefer `is None`) |
 | Rust | `pattern { $X.unwrap_or(Default::default()) }` | a verbose `unwrap_or` |
+| Swift | `pattern { $X as! $T }` | a force cast (prefer `as?`) |
 | TypeScript | `pattern { $X! }` | a non-null assertion |
 | C | `query "(function_definition) @match"` | a whole function (then filter with `has`) |
 

@@ -1,0 +1,15 @@
+rule size-zero-to-isempty {
+  message  "use $X.isEmpty() instead of comparing .size to 0"
+  severity info
+  in       kotlin
+  note     "$X.isEmpty() states the intent directly and works on any Collection/Map/CharSequence, whereas .size == 0 reads as an arithmetic check and is easy to misread."
+  pattern  { $X.size == 0 }
+  fix      "$X.isEmpty()"
+  test {
+    match    "fun f(list: List<Int>) { if (list.size == 0) return }"
+    match    "fun g(m: Map<String, Int>): Boolean { return m.size == 0 }"
+    no_match "fun h(list: List<Int>) { if (list.size == 1) return }"
+    no_match "fun i(list: List<Int>) { if (list.isEmpty()) return }"
+    no_match "fun j(list: List<Int>) { if (list.size > 0) return }"
+  }
+}

@@ -1,0 +1,13 @@
+rule no-println {
+  message  "remove this leftover println debug output or use a proper logger"
+  severity warning
+  in       kotlin
+  note     "println writes unstructured output to stdout with no levels, timestamps, or filtering, and is almost always left over from debugging. Use a real logger (e.g. SLF4J) instead, or delete the call."
+  pattern  { println($$$) }
+  test {
+    match    "fun f() { println(\"hello\") }"
+    match    "fun f() { println() }"
+    no_match "fun f() { System.out.println(\"x\") }"
+    no_match "fun f(logger: Logger) { logger.info(\"x\") }"
+  }
+}

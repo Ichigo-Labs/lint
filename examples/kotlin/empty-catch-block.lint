@@ -1,0 +1,14 @@
+rule empty-catch-block {
+  message  "empty catch block swallows the exception silently; log it or let it propagate"
+  severity warning
+  in       kotlin
+  note     "Catching and discarding an exception hides real failures and makes bugs hard to diagnose. At minimum log the exception or rethrow it; if ignoring it is truly intended, add a comment explaining why."
+  query    "(catch_block) @match"
+  where    $match matches "\\{\\s*\\}\\s*$"
+  test {
+    match    "fun f() { try { g() } catch (e: Exception) { } }"
+    match    "fun f() { try { g() } catch (e: Throwable) {} }"
+    no_match "fun f() { try { g() } catch (e: Exception) { log(e) } }"
+    no_match "fun f() { try { g() } catch (e: Exception) { throw e } }"
+  }
+}

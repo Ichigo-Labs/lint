@@ -1,0 +1,13 @@
+rule thread-sleep {
+  message  "Thread.sleep blocks the underlying thread; in a coroutine use delay() instead"
+  severity warning
+  in       kotlin
+  note     "Thread.sleep parks the OS thread, defeating coroutine concurrency and starving the dispatcher's thread pool. Inside a suspend function or coroutine builder, call delay() (which is suspending and cancellable) instead."
+  pattern  { Thread.sleep($$$ARGS) }
+  test {
+    match    "fun f() { Thread.sleep(100) }"
+    match    "suspend fun poll() { while (true) { Thread.sleep(1000L) } }"
+    no_match "suspend fun f() { delay(100) }"
+    no_match "fun f(t: Timer) { t.sleep(100) }"
+  }
+}

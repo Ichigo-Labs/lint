@@ -1,0 +1,13 @@
+rule todo-call {
+  message  "TODO() left in code; it throws NotImplementedError at runtime — implement it or remove it"
+  severity warning
+  in       kotlin
+  note     "Kotlin's stdlib TODO(...) is not a comment: it compiles to a real call that throws kotlin.NotImplementedError when reached. Replace it with the actual implementation before shipping."
+  pattern  { TODO($$$) }
+  test {
+    match    "fun f() { TODO() }"
+    match    "fun f(): Int { return TODO(\"compute the answer\") }"
+    no_match "fun f() { // TODO: implement this later\n}"
+    no_match "fun f() { doWork() }"
+  }
+}

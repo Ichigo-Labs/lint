@@ -1,0 +1,14 @@
+rule redundant-boolean-comparison {
+  message  "redundant comparison `$X == true`; use `$X` directly"
+  severity info
+  in       kotlin
+  note     "Comparing a Boolean expression to the literal `true` adds noise without changing meaning. Drop the comparison and use the expression itself."
+  pattern  { $X == true }
+  fix      "$X"
+  test {
+    match    "fun f(b: Boolean) { if (b == true) println(b) }"
+    match    "fun g(b: Boolean): Boolean { return b == true }"
+    no_match "fun h(b: Boolean) { if (b == false) println(b) }"
+    no_match "fun i(b: Boolean, c: Boolean) { if (b == c) println(b) }"
+  }
+}

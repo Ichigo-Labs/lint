@@ -1,0 +1,14 @@
+rule self-comparison-operator {
+  message  "both sides of `==` are identical (`$X == $X`); this comparison is always true, likely a typo"
+  severity warning
+  in       kotlin
+  note     "Comparing a value to itself with == always yields true, so the branch it guards is dead code. This is usually a typo for a comparison against a different operand. (The NaN-detection idiom uses != , which this rule does not flag.)"
+  pattern  { $X == $X }
+  test {
+    match    "fun f(a: Int): Boolean { return a == a }"
+    match    "fun g(p: Point): Boolean { return p.x == p.x }"
+    no_match "fun h(a: Int, b: Int): Boolean { return a == b }"
+    no_match "fun i(a: Int): Boolean { return a == 0 }"
+    no_match "fun j(a: Int): Boolean { return a != a }"
+  }
+}

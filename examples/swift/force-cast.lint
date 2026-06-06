@@ -1,0 +1,14 @@
+rule force-cast {
+  message  "force-cast `as!` crashes at runtime on a type mismatch; use `as?` with optional binding instead"
+  severity warning
+  in       swift
+  note     "A failed `as!` is a fatal runtime error. Prefer `if let v = x as? T` (or `guard let`) so a mismatched type is handled gracefully rather than trapping."
+  pattern  { $X as! $T }
+  test {
+    match    "func f(x: Any) { let n = x as! Int }"
+    match    "func g(v: Any) -> String { return v as! String }"
+    no_match "func f(x: Any) { let n = x as? Int }"
+    no_match "func g(v: Any) { if let n = v as? Int { use(n) } }"
+    no_match "func h(x: Int) { let n = x as Any }"
+  }
+}

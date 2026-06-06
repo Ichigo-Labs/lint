@@ -1,0 +1,14 @@
+rule not-null-assertion {
+  message  "avoid the !! not-null assertion; it throws NullPointerException when null. Use ?., ?:, or a null check that smart-casts instead"
+  severity warning
+  in       kotlin
+  note     "!! converts a nullable type to non-null by asserting it is not null, crashing with an NPE if it is. Prefer a safe call (?.), an Elvis fallback (?:), or an explicit null check that lets the compiler smart-cast."
+  pattern  { $X!! }
+  test {
+    match    "fun f(a: String?) { val x = a!! }"
+    match    "fun f(a: String?) { val n = a!!.length }"
+    no_match "fun f(a: String?) { val x = a?.length }"
+    no_match "fun f(a: String) { val x = a.length }"
+    no_match "fun f(a: Int) { var c = a; c++ }"
+  }
+}

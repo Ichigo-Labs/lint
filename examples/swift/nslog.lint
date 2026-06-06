@@ -1,0 +1,13 @@
+rule nslog {
+  message  "avoid NSLog; use a unified-logging os.Logger instead"
+  severity info
+  in       swift
+  note     "NSLog routes to ASL/syslog, is synchronous and slow, and lacks privacy/level controls. Prefer the unified logging API (os.Logger / Logger.log) for structured, performant, privacy-aware logging."
+  pattern  { NSLog($$$) }
+  test {
+    match    "func f(_ name: String) { NSLog(\"hello %@\", name) }"
+    match    "func f() { NSLog(\"started\") }"
+    no_match "func f() { logger.log(\"started\") }"
+    no_match "func f() { os_log(\"started\") }"
+  }
+}

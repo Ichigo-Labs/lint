@@ -1,0 +1,13 @@
+rule self-comparison {
+  message  "`$X == $X` compares a value to itself and is always true; likely a typo for a different operand"
+  severity warning
+  in       swift
+  note     "An identical left and right operand of `==` makes the comparison a constant. This is almost always a mistake — one side was meant to reference a different value. (NaN aside, prefer `x.isNaN` if a NaN check was intended.)"
+  pattern  { $X == $X }
+  test {
+    match    "func f(a: Int) -> Bool { return a == a }"
+    match    "func f(p: Point) -> Bool { return p.x == p.x }"
+    no_match "func f(a: Int, b: Int) -> Bool { return a == b }"
+    no_match "func f(p: Point) -> Bool { return p.x == p.y }"
+  }
+}

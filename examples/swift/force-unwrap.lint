@@ -1,0 +1,15 @@
+rule force-unwrap {
+  message  "force-unwrap `$X!` crashes if the value is nil; use optional binding (if let / guard let) or `??` instead"
+  severity warning
+  in       swift
+  note     "A force-unwrap traps at runtime whenever the operand is nil, turning a recoverable absence into a crash. Bind the optional with `if let`/`guard let`, or supply a default with `??`, so the nil case is handled explicitly."
+  pattern  { $X! }
+  test {
+    match    "func f(dict: [String: Int]) { let v = dict[\"key\"]! }"
+    match    "func f(value: Int?) { let v = value! }"
+    no_match "func f(obj: Foo?) { let v = obj?.prop }"
+    no_match "func f(flag: Bool) { if !flag { return } }"
+    no_match "func f() { let v = try! load() }"
+    no_match "func f(x: Any) { let v = x as! Int }"
+  }
+}

@@ -1,0 +1,13 @@
+rule force-try {
+  message  "force-try `try!` crashes if the call throws; use do/try/catch or try?"
+  severity warning
+  in       swift
+  note     "`try!` traps and aborts the process when the expression throws, turning a recoverable error into a crash. Handle it with a do/catch block, or use `try?` when nil-on-failure is acceptable."
+  pattern  { try! $X }
+  test {
+    match    "func f() throws { let a = try! risky() }"
+    match    "func f() throws { return try! decoder.decode(T.self, from: data) }"
+    no_match "func f() throws { let a = try? risky() }"
+    no_match "func f() throws { let a = try risky() }"
+  }
+}
