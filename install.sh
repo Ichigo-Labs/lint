@@ -41,14 +41,14 @@ main() {
   case "$os" in
     Linux)  os=linux ;;
     Darwin) os=darwin ;;
-    *) err "unsupported OS '$os' — build from source: https://github.com/${REPO}#build-from-source" ;;
+    *) err "unsupported OS '$os' — see https://github.com/${REPO}" ;;
   esac
 
   arch="$(uname -m)"
   case "$arch" in
     x86_64 | amd64)  arch=amd64 ;;
     aarch64 | arm64) arch=arm64 ;;
-    *) err "unsupported architecture '$arch' — build from source: https://github.com/${REPO}#build-from-source" ;;
+    *) err "unsupported architecture '$arch' — see https://github.com/${REPO}" ;;
   esac
 
   asset="${BIN}_${os}_${arch}.tar.gz"

@@ -2,15 +2,11 @@
 
 [![CI](https://github.com/Ichigo-Labs/lint/actions/workflows/ci.yml/badge.svg)](https://github.com/Ichigo-Labs/lint/actions/workflows/ci.yml)
 
-**lint** finds bugs and bad patterns in your code by matching its *syntax
-tree*, not its text. You write small rules in a focused DSL, and lint runs
-them across C, C++, C#, Go, Java, Kotlin, Python, Rust, Swift, and
-TypeScript/JavaScript — one rule language for every codebase.
+**Quick and concise lint rules for agents.**
 
-It is a modern, multi-language, AST-based successor to
-[checkr](https://github.com/ichigo-labs/checkr): same "write a project lint rule
-in a minute" spirit, but matching is structural (over a Tree-sitter parse tree)
-instead of line-by-line regex.
+lint finds bugs and bad patterns by matching your code's *syntax tree*, not its
+text: you write small rules in a focused DSL and run them across many languages
+with `lint check`.
 
 ```
 $ lint check
@@ -22,112 +18,42 @@ main.go
 ✖ 1 warning(s)
 ```
 
-## Why structural matching?
+## Supported languages
 
-A grep/regex rule like `fmt\.Println` can't tell `fmt.Println(x)` from
-`myfmt.Println` in a comment, a string, or `fmt.Sprintln`. lint matches the
-*shape* of the code:
+| Language | `in` name (aliases) | Extensions |
+| --- | --- | --- |
+| C | `c` | `.c .h` |
+| C++ | `cpp` (`c++`, `cc`) | `.cpp .cxx .cc .hpp .hxx .hh` |
+| C# | `csharp` (`cs`, `c#`) | `.cs` |
+| Go | `go` (`golang`) | `.go` |
+| Java | `java` | `.java` |
+| Kotlin | `kotlin` (`kt`, `kts`) | `.kt .kts` |
+| Python | `python` (`py`) | `.py .pyi` |
+| Rust | `rust` (`rs`) | `.rs` |
+| Swift | `swift` | `.swift` |
+| TypeScript | `typescript` (`ts`) | `.ts .mts .cts` |
+| TSX / JS | `tsx` (`javascript`, `js`, `jsx`) | `.tsx .js .jsx .mjs .cjs` |
 
-- **Formatting doesn't matter.** `panic( "x" )`, `panic("x")`, and a `panic`
-  split across lines are all the same pattern.
-- **Operators *do* matter.** `$A + $B` matches `+`, never `-`.
-- **Comments and strings are not code.** A pattern only matches real syntax.
-- **Metavariables capture and back-reference.** `$X = append($Y, ...)` with
-  `where $X != $Y` finds copy/paste slice bugs that no regex can express.
-
-Compared to per-language linters (ESLint, golangci-lint, Roslyn analyzers),
-lint trades depth for reach: you get *one* tiny rule language and a fast feedback
-loop (`lint test`) for project-specific rules across every language in your
-repo, without writing a plugin in each ecosystem.
+(Run `lint langs` to print this list.)
 
 ## Install
 
-### Quick install (prebuilt binary)
-
-The installer downloads a prebuilt binary for your platform, verifies its
-checksum, and puts it on your `PATH` — **no Go or C compiler required**:
+**CLI only**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Ichigo-Labs/lint/master/install.sh | bash
 ```
 
-It installs into `/usr/local/bin` if that's writable, otherwise `~/.local/bin`,
-and supports **Linux** and **macOS** (amd64 and arm64). **Windows** (amd64)
-binaries are published too — grab the `.zip` from the
-[releases page](https://github.com/Ichigo-Labs/lint/releases) (see below).
+**Project Hook**
 
 ```bash
-# install a specific version
-curl -fsSL https://raw.githubusercontent.com/Ichigo-Labs/lint/master/install.sh | LINT_VERSION=v0.2.0 bash
-
-# install into a directory of your choosing
-curl -fsSL https://raw.githubusercontent.com/Ichigo-Labs/lint/master/install.sh | LINT_INSTALL_DIR="$HOME/bin" bash
-```
-
-Prefer to do it by hand? Grab a tarball (or `.zip` on Windows) from the
-[releases page](https://github.com/Ichigo-Labs/lint/releases), verify it
-against `checksums.txt`, and drop the `lint` binary (`lint.exe` on Windows) on
-your `PATH`.
-
-### Build from source
-
-lint embeds Tree-sitter grammars, so building it needs **Go and a C compiler
-with CGO enabled**:
-
-```bash
-git clone https://github.com/Ichigo-Labs/lint
-cd lint
-CGO_ENABLED=1 go build -o lint ./cmd/lint
-```
-
-That produces a `lint` binary in the current directory. Put it on your `PATH`
-(or run `make install` to install it into `$GOBIN`). `make` and `make test` are
-also available.
-
-> Building without CGO (`CGO_ENABLED=0`) will fail — the grammars are C and are
-> compiled into the binary.
-
-### Vendor a pinned `lint` into your project (`lint init`)
-
-For a team, pin an exact lint version per project — no global install needed.
-From your project root:
-
-```bash
+curl -fsSL https://raw.githubusercontent.com/Ichigo-Labs/lint/master/install.sh | bash
 lint init
 ```
 
-This:
-
-- writes **`bin/lint`**, a small launcher (commit it) that downloads the pinned
-  lint release for the current OS/arch on first use, verifies its SHA-256
-  checksum, caches it under `bin/.lint/`, and runs it;
-- pins the version to the lint you ran `init` with — override with
-  `lint init --version v0.2.0`. (A source/dev build has no release tag, so it
-  can't be pinned: `init` falls back to `latest` and warns — pass
-  `--version vX.Y.Z` to pin a specific release.)
-- adds `bin/.lint/` to `.gitignore` (the cache is per-machine; the launcher is
-  committed);
-- installs a git `pre-commit` hook that runs `lint check` on staged files,
-  unless a pre-commit hook already exists. (If lint can't be fetched yet — no
-  release published, or offline — the hook skips rather than blocking commits.)
-
-Commit `bin/lint`. Teammates on **Linux and macOS** then run it directly — the
-right binary is fetched automatically for their platform, so everyone is on the
-same version with nothing installed globally:
-
-```bash
-./bin/lint check      # uses the pinned version (downloaded on first run)
-./bin/lint version    # show the pinned version and build info
-```
-
-The launcher targets Linux and macOS; **Windows** teammates install lint from
-the [releases page](https://github.com/Ichigo-Labs/lint/releases) (`.zip`) — the
-hook falls back to a `lint` on their `PATH`. A `latest` pin is downloaded once
-and then cached; to move to a new release, re-run `lint init --version vX.Y.Z`
-(pinning a concrete version is recommended for reproducible builds).
-
-Flags: `--dir <dir>` (default `bin`), `--version <tag>`, `--no-hook`, and
-`--force` (overwrite an existing `bin/lint`).
+1. Creates a platform agnostic copy of lint to `./bin`
+2. Registers a lint pre-commit hook if one doesn't exist
+3. Adds `./bin/.lint` to `.gitignore`
 
 ## Quickstart
 
@@ -161,80 +87,6 @@ lint langs                         # list supported languages
 lint version                       # print version, commit, and build info
 ```
 
-### How rules are discovered
-
-Running `lint` (or `lint check`) with no `--rules` flag discovers every
-`.lint/` directory **from the current directory up through its ancestors and
-down through its descendants**, and loads every `*.lint` file in them. Ancestor
-rules apply to the whole tree; a nested `.lint/` applies only to its own
-subtree. This lets a monorepo keep global rules at the root and package-specific
-rules deeper down.
-
-Pass `--rules <dir>` to load rules from exactly one directory instead (the files
-directly inside it — discovery is not recursive into that directory).
-
-## Git pre-commit hook
-
-Run lint automatically before every commit so violations never land in history.
-
-> **Tip:** [`lint init`](#vendor-a-pinned-lint-into-your-project-lint-init) sets
-> up a vendored, version-pinned `lint` *and* this hook in one step. The manual
-> options below are for when you want to wire it up yourself.
-
-By default `lint check` exits non-zero only on **error**-severity findings, so a
-hook will block a commit on errors but let warnings through. Add
-`--error-on-warning` if you want warnings to block commits too.
-
-### Option A — a plain git hook
-
-Create `.githooks/pre-commit` in your repo and make it executable
-(`chmod +x .githooks/pre-commit`):
-
-```bash
-#!/usr/bin/env bash
-# Lint the files staged for this commit and block on findings.
-set -euo pipefail
-
-# Staged files (added/copied/modified). lint silently skips paths whose
-# language it doesn't recognize, so passing all of them is safe.
-files="$(git diff --cached --name-only --diff-filter=ACM)"
-[ -z "$files" ] && exit 0
-
-# NUL-delimited so filenames with spaces survive. Drop --error-on-warning to
-# block only on error-severity findings.
-git diff --cached --name-only --diff-filter=ACM -z | xargs -0 lint check --error-on-warning
-```
-
-Then point git at that tracked directory so the hook is shared with the whole
-team (unlike `.git/hooks/`, which isn't committed):
-
-```bash
-git config core.hooksPath .githooks
-```
-
-### Option B — the [pre-commit](https://pre-commit.com) framework
-
-Add a local hook to `.pre-commit-config.yaml`:
-
-```yaml
-repos:
-  - repo: local
-    hooks:
-      - id: lint
-        name: lint
-        entry: lint check --error-on-warning
-        language: system
-        pass_filenames: true
-        types: [text]
-```
-
-Then install it with `pre-commit install`. pre-commit passes the staged files to
-`lint check`, which checks only those paths against your discovered `.lint/`
-rules.
-
-> Either way, `lint` must be on the hook's `PATH` — install it with the
-> [installer above](#install) (or `make install`).
-
 ## Feature overview
 
 | Feature | What it gives you |
@@ -253,26 +105,8 @@ rules.
 | Project config | `.lint.toml` disables rules or overrides severity per project |
 | Severities & tags | `error`/`warning`/`info`; `url`/`tags` metadata; `--tag`, `--quiet`, `--error-on-warning` |
 | JSON output | `--json` for editor/CI integration (includes `url`, `tags`) |
-| Parallel + scoped | `-j` workers, one tree walk per file shared across rules; `.lint/` scopes rules to subtrees |
+| Parallel | `-j` workers; one tree walk per file, shared across all rules |
 | Polyglot rules | Omit `in` and a rule compiles for every language whose grammar accepts it |
-
-## Supported languages
-
-| Language | `in` name (aliases) | Extensions |
-| --- | --- | --- |
-| C | `c` | `.c .h` |
-| C++ | `cpp` (`c++`, `cc`) | `.cpp .cxx .cc .hpp .hxx .hh` |
-| C# | `csharp` (`cs`, `c#`) | `.cs` |
-| Go | `go` (`golang`) | `.go` |
-| Java | `java` | `.java` |
-| Kotlin | `kotlin` (`kt`, `kts`) | `.kt .kts` |
-| Python | `python` (`py`) | `.py .pyi` |
-| Rust | `rust` (`rs`) | `.rs` |
-| Swift | `swift` | `.swift` |
-| TypeScript | `typescript` (`ts`) | `.ts .mts .cts` |
-| TSX / JS | `tsx` (`javascript`, `js`, `jsx`) | `.tsx .js .jsx .mjs .cjs` |
-
-(Run `lint langs` to print this list.)
 
 ## Example rules
 

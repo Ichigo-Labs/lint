@@ -25,20 +25,20 @@ func writeFile(t *testing.T, path, content string) {
 // it so that reported file paths are relative to the project root. It returns the
 // absolute project root.
 //
-// Layout:
+// Layout (rules live only in the project-root .lint/ and apply to the whole tree):
 //
 //	<root>/
-//	  .lint/root.lint        rule no_console (typescript): console.log($$$)
+//	  .lint/console.lint     rule no_console (typescript): console.log($$$)
+//	  .lint/panic.lint       rule no_panic (go): panic($$$)
 //	  src/
 //	    app.ts                 console.log -> flagged by no_console
 //	    util.go                no panic / no console -> clean
 //	    notes.txt              console.log text, but .txt is not a known language
 //	  pkg/
-//	    .lint/nested.lint    rule no_panic (go): panic($$$), scoped to pkg/
-//	    core.go                panic -> flagged by no_panic (in scope)
-//	    widget.ts              console.log -> flagged by no_console (root applies here)
+//	    core.go                panic -> flagged by no_panic
+//	    widget.ts              console.log -> flagged by no_console
 //	  other/
-//	    helper.go              panic, but out of pkg/ scope -> NOT flagged
+//	    helper.go              panic -> flagged by no_panic (root rules apply everywhere)
 func setupProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -49,13 +49,13 @@ func setupProject(t *testing.T) string {
 		root = resolved
 	}
 
-	writeFile(t, filepath.Join(root, ".lint", "root.lint"), `rule no_console {
+	writeFile(t, filepath.Join(root, ".lint", "console.lint"), `rule no_console {
   in typescript
   message "avoid console.log"
   pattern { console.log($$$) }
 }`)
 
-	writeFile(t, filepath.Join(root, "pkg", ".lint", "nested.lint"), `rule no_panic {
+	writeFile(t, filepath.Join(root, ".lint", "panic.lint"), `rule no_panic {
   in go
   message "avoid panic"
   pattern { panic($$$) }
@@ -114,8 +114,8 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// TestLoadDiscoversRules checks that Load finds rules from both the root and a
-// nested .lint directory.
+// TestLoadDiscoversRules checks that Load finds every rule in the project-root
+// .lint directory.
 func TestLoadDiscoversRules(t *testing.T) {
 	setupProject(t)
 
@@ -141,12 +141,11 @@ func TestLoadDiscoversRules(t *testing.T) {
 	}
 }
 
-// TestCheckScopeAndPaths verifies that:
-//   - a root .lint rule applies across the whole tree (src/ and nested pkg/),
-//   - a nested .lint rule applies only to its own subtree (pkg/, not other/),
+// TestCheckAppliesAcrossTree verifies that:
+//   - root .lint rules apply across the whole tree (src/, pkg/, and other/),
 //   - findings carry file paths relative to the working directory,
 //   - files with unknown extensions (.txt) are not selected.
-func TestCheckScopeAndPaths(t *testing.T) {
+func TestCheckAppliesAcrossTree(t *testing.T) {
 	setupProject(t)
 
 	rs, lerrs, err := Load(".", "")
@@ -167,21 +166,18 @@ func TestCheckScopeAndPaths(t *testing.T) {
 
 	got := collectKeys(res.Findings)
 	want := []string{
-		filepath.Join("pkg", "core.go") + "|no_panic",     // nested rule, in scope
-		filepath.Join("pkg", "widget.ts") + "|no_console", // root rule reaches nested dir
-		filepath.Join("src", "app.ts") + "|no_console",    // root rule
+		filepath.Join("other", "helper.go") + "|no_panic", // root rule reaches every dir
+		filepath.Join("pkg", "core.go") + "|no_panic",
+		filepath.Join("pkg", "widget.ts") + "|no_console",
+		filepath.Join("src", "app.ts") + "|no_console",
 	}
 	sort.Strings(want)
 	if !equalStrings(got, want) {
 		t.Fatalf("findings = %v, want %v", got, want)
 	}
 
-	// Scope: the nested no_panic rule must NOT fire on other/helper.go, even
-	// though it is the same language (go) and also calls panic().
+	// Files with unknown extensions (.txt) are never selected.
 	for _, f := range res.Findings {
-		if f.File == filepath.Join("other", "helper.go") {
-			t.Fatalf("nested rule leaked outside its subtree: fired on %s", f.File)
-		}
 		if filepath.Ext(f.File) == ".txt" {
 			t.Fatalf("unexpected finding in non-source file %s", f.File)
 		}
@@ -210,7 +206,11 @@ func TestLanguageFiltering(t *testing.T) {
 		t.Fatalf("Check go: %v", err)
 	}
 	gotGo := collectKeys(goRes.Findings)
-	wantGo := []string{filepath.Join("pkg", "core.go") + "|no_panic"}
+	wantGo := []string{
+		filepath.Join("other", "helper.go") + "|no_panic",
+		filepath.Join("pkg", "core.go") + "|no_panic",
+	}
+	sort.Strings(wantGo)
 	if !equalStrings(gotGo, wantGo) {
 		t.Fatalf("go-filtered findings = %v, want %v", gotGo, wantGo)
 	}
@@ -263,14 +263,19 @@ func TestExtensionMappingSelectsFiles(t *testing.T) {
 	}
 }
 
-// TestRulesDirOverride checks that an explicit rules directory is applied to the
-// whole tree regardless of where the source files live.
+// TestRulesDirOverride checks that an explicit --rules directory replaces
+// discovery (the project-root .lint/ is ignored) and applies to every file.
 func TestRulesDirOverride(t *testing.T) {
 	root := setupProject(t)
 
-	// Use only the nested pkg/.lint as an override; it should now apply
-	// everywhere, including other/helper.go which is normally out of scope.
-	override := filepath.Join(root, "pkg", ".lint")
+	// A rules directory outside the discovered .lint/, holding only no_panic.
+	override := filepath.Join(root, "altrules")
+	writeFile(t, filepath.Join(override, "p.lint"), `rule no_panic {
+  in go
+  message "avoid panic"
+  pattern { panic($$$) }
+}`)
+
 	rs, lerrs, err := Load(".", override)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -286,6 +291,8 @@ func TestRulesDirOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
+	// Only no_panic ran (root's no_console was not discovered), and it fired
+	// across the whole tree.
 	got := collectKeys(res.Findings)
 	want := []string{
 		filepath.Join("other", "helper.go") + "|no_panic",

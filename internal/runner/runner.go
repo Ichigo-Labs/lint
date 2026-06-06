@@ -23,23 +23,17 @@ type LoadError struct {
 
 func (e LoadError) Error() string { return fmt.Sprintf("%s: %v", e.Path, e.Err) }
 
-// RuleSet is a collection of compiled rules, each scoped to a directory subtree.
+// RuleSet is the collection of compiled rules loaded from a project's `.lint`
+// directory.
 type RuleSet struct {
-	rules  []scopedRule
+	rules  []*engine.CompiledRule
 	config *projectConfig // project-level disable/severity overrides (never nil after Load)
 }
 
-type scopedRule struct {
-	rule  *engine.CompiledRule
-	scope string // absolute directory; rule applies to files at or under it
-}
-
-// Rules returns every compiled rule (ignoring scope), sorted by id.
+// Rules returns every compiled rule, sorted by id.
 func (rs *RuleSet) Rules() []*engine.CompiledRule {
-	out := make([]*engine.CompiledRule, 0, len(rs.rules))
-	for _, sr := range rs.rules {
-		out = append(out, sr.rule)
-	}
+	out := make([]*engine.CompiledRule, len(rs.rules))
+	copy(out, rs.rules)
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
@@ -53,95 +47,54 @@ var ignoredDirs = map[string]bool{
 	".idea": true, ".vscode": true, "__pycache__": true, ".lint": true,
 }
 
-// Load discovers `.lint/` directories from root upward (ancestors) and
-// downward (descendants), compiling every `*.lint` rule it finds. If
-// rulesDirOverride is set, only that directory is loaded and applied to the
-// whole tree.
+// Load compiles every `*.lint` rule in the project's `.lint/` directory at root.
+// If rulesDirOverride is set, that directory's rules are loaded instead. Rules
+// apply to every file checked.
 func Load(root, rulesDirOverride string) (*RuleSet, []LoadError, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, nil, err
 	}
 	rs := &RuleSet{}
-	if cfg, err := loadProjectConfig(absRoot); err != nil {
+	cfg, err := loadProjectConfig(absRoot)
+	if err != nil {
 		return nil, nil, err
-	} else {
-		rs.config = cfg
 	}
-	var lerrs []LoadError
-	seen := map[string]bool{}
+	rs.config = cfg
 
-	loadDir := func(lintDir, scope string) {
-		if seen[lintDir] {
-			return
-		}
-		seen[lintDir] = true
-		entries, err := os.ReadDir(lintDir)
-		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".lint") {
-				continue
-			}
-			path := filepath.Join(lintDir, e.Name())
-			rules, err := dsl.ParseFile(path)
-			if err != nil {
-				lerrs = append(lerrs, LoadError{Path: path, Err: err})
-				continue
-			}
-			for _, r := range rules {
-				cr, err := engine.Compile(r)
-				if err != nil {
-					lerrs = append(lerrs, LoadError{Path: path, Err: err})
-					continue
-				}
-				rs.rules = append(rs.rules, scopedRule{rule: cr, scope: scope})
-			}
-		}
-	}
-
+	rulesDir := filepath.Join(absRoot, ".lint")
 	if rulesDirOverride != "" {
 		abs, err := filepath.Abs(rulesDirOverride)
 		if err != nil {
 			return nil, nil, err
 		}
-		// An explicit --rules directory applies to every checked file, not just
-		// files under the working directory. Empty scope means "global".
-		loadDir(abs, "")
-		return rs, lerrs, nil
+		rulesDir = abs
 	}
 
-	// Ancestors: every <ancestor>/.lint applies to that ancestor's subtree.
-	for dir := absRoot; ; {
-		ld := filepath.Join(dir, ".lint")
-		if fi, err := os.Stat(ld); err == nil && fi.IsDir() {
-			loadDir(ld, dir)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
+	var lerrs []LoadError
+	entries, err := os.ReadDir(rulesDir)
+	if err != nil {
+		return rs, lerrs, nil // no rules directory: an empty ruleset, not an error
 	}
-
-	// Descendants: nested .lint dirs apply to their own subtree.
-	filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".lint") {
+			continue
+		}
+		path := filepath.Join(rulesDir, e.Name())
+		rules, err := dsl.ParseFile(path)
 		if err != nil {
-			return nil
+			lerrs = append(lerrs, LoadError{Path: path, Err: err})
+			continue
 		}
-		if d.IsDir() {
-			if path != absRoot && ignoredDirs[d.Name()] {
-				if d.Name() == ".lint" {
-					loadDir(path, filepath.Dir(path))
-				}
-				return filepath.SkipDir
+		for _, r := range rules {
+			cr, err := engine.Compile(r)
+			if err != nil {
+				lerrs = append(lerrs, LoadError{Path: path, Err: err})
+				continue
 			}
-			return nil
+			rs.rules = append(rs.rules, cr)
 		}
-		return nil
-	})
-
+	}
 	return rs, lerrs, nil
 }
 
@@ -230,11 +183,7 @@ func (rs *RuleSet) checkFile(path string, langFilter, tagFilter map[string]bool)
 	if len(langFilter) > 0 && !langFilter[l.Name] {
 		return nil, nil, nil
 	}
-	absDir, err := filepath.Abs(filepath.Dir(path))
-	if err != nil {
-		return nil, nil, err
-	}
-	applicable := rs.applicable(absDir, l)
+	applicable := rs.applicable(l)
 	if len(applicable) == 0 {
 		return nil, nil, nil
 	}
@@ -274,14 +223,11 @@ func (rs *RuleSet) checkFile(path string, langFilter, tagFilter map[string]bool)
 	return findings, src, nil
 }
 
-func (rs *RuleSet) applicable(absDir string, l *lang.Language) []*engine.CompiledRule {
+func (rs *RuleSet) applicable(l *lang.Language) []*engine.CompiledRule {
 	var out []*engine.CompiledRule
-	for _, sr := range rs.rules {
-		if !withinScope(absDir, sr.scope) {
-			continue
-		}
-		if rs.ruleTargets(sr.rule, l) {
-			out = append(out, sr.rule)
+	for _, cr := range rs.rules {
+		if rs.ruleTargets(cr, l) {
+			out = append(out, cr)
 		}
 	}
 	return out
@@ -304,13 +250,6 @@ func (rs *RuleSet) ruleTargets(cr *engine.CompiledRule, l *lang.Language) bool {
 		}
 	}
 	return false
-}
-
-func withinScope(dir, scope string) bool {
-	if scope == "" || dir == scope {
-		return true // empty scope = global (e.g. an explicit --rules dir)
-	}
-	return strings.HasPrefix(dir, scope+string(os.PathSeparator))
 }
 
 func collectFiles(paths []string) ([]string, error) {
