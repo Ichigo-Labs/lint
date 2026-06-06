@@ -25,7 +25,8 @@ func (e LoadError) Error() string { return fmt.Sprintf("%s: %v", e.Path, e.Err) 
 
 // RuleSet is a collection of compiled rules, each scoped to a directory subtree.
 type RuleSet struct {
-	rules []scopedRule
+	rules  []scopedRule
+	config *projectConfig // project-level disable/severity overrides (never nil after Load)
 }
 
 type scopedRule struct {
@@ -62,6 +63,11 @@ func Load(root, rulesDirOverride string) (*RuleSet, []LoadError, error) {
 		return nil, nil, err
 	}
 	rs := &RuleSet{}
+	if cfg, err := loadProjectConfig(absRoot); err != nil {
+		return nil, nil, err
+	} else {
+		rs.config = cfg
+	}
 	var lerrs []LoadError
 	seen := map[string]bool{}
 
@@ -144,6 +150,7 @@ type Options struct {
 	Paths       []string        // files/dirs to check (default ".")
 	Concurrency int             // worker count (default GOMAXPROCS)
 	LangFilter  map[string]bool // if non-empty, only these languages
+	TagFilter   map[string]bool // if non-empty, only rules carrying one of these tags
 }
 
 // Result is the outcome of a check run.
@@ -177,7 +184,7 @@ func (rs *RuleSet) Check(opts Options) (*Result, error) {
 	worker := func() {
 		defer wg.Done()
 		for j := range jobs {
-			fs, src, ferr := rs.checkFile(j.path, opts.LangFilter)
+			fs, src, ferr := rs.checkFile(j.path, opts.LangFilter, opts.TagFilter)
 			mu.Lock()
 			if ferr != nil {
 				res.FileErrs = append(res.FileErrs, LoadError{Path: j.path, Err: ferr})
@@ -215,7 +222,7 @@ func (rs *RuleSet) Check(opts Options) (*Result, error) {
 	return res, nil
 }
 
-func (rs *RuleSet) checkFile(path string, langFilter map[string]bool) ([]engine.Finding, []byte, error) {
+func (rs *RuleSet) checkFile(path string, langFilter, tagFilter map[string]bool) ([]engine.Finding, []byte, error) {
 	l, ok := lang.ForPath(path)
 	if !ok {
 		return nil, nil, nil
@@ -240,12 +247,29 @@ func (rs *RuleSet) checkFile(path string, langFilter map[string]bool) ([]engine.
 		return nil, nil, err
 	}
 	rp := reportPath(path)
+	// Index the tree once and share it across every rule for this file.
+	idx := engine.BuildIndex(tree)
 	var findings []engine.Finding
 	for _, cr := range applicable {
-		for _, f := range cr.Run(l, tree, src) {
+		if rs.config.isDisabled(cr.ID) {
+			continue
+		}
+		if len(tagFilter) > 0 && !anyTag(cr, tagFilter) {
+			continue
+		}
+		sevOverride, hasOverride := rs.config.severityFor(cr.ID)
+		for _, f := range cr.RunIndexed(l, tree, src, idx) {
 			f.File = rp
+			if hasOverride {
+				f.Severity = sevOverride
+			}
 			findings = append(findings, f)
 		}
+	}
+	// Drop findings silenced by inline `lint:ignore` comments (only worth the
+	// tree walk when something actually fired).
+	if len(findings) > 0 {
+		findings = filterSuppressed(findings, collectSuppressions(l, tree, src))
 	}
 	return findings, src, nil
 }
@@ -261,6 +285,16 @@ func (rs *RuleSet) applicable(absDir string, l *lang.Language) []*engine.Compile
 		}
 	}
 	return out
+}
+
+// anyTag reports whether a rule carries at least one of the filter tags.
+func anyTag(cr *engine.CompiledRule, tagFilter map[string]bool) bool {
+	for _, t := range cr.Tags {
+		if tagFilter[t] {
+			return true
+		}
+	}
+	return false
 }
 
 func (rs *RuleSet) ruleTargets(cr *engine.CompiledRule, l *lang.Language) bool {

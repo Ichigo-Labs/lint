@@ -1,0 +1,15 @@
+rule long-timeout {
+  message  "setTimeout delay of $MS ms is suspiciously long; double-check the unit"
+  severity info
+  in       typescript
+  tags     correctness
+
+  # A numeric `where` compares the captured literal as a number.
+  pattern { setTimeout($_, $MS) }
+  where    $MS > 60000
+
+  test {
+    match    "setTimeout(refresh, 600000)"
+    no_match "setTimeout(refresh, 500)"
+  }
+}

@@ -15,6 +15,7 @@ type metaKind int
 const (
 	mvSingle metaKind = iota
 	mvVariadic
+	mvOperator // a binary/comparison operator hole ($OP); binds the operator token
 )
 
 // metaSpec describes a metavariable discovered in a pattern.
@@ -26,14 +27,37 @@ type metaSpec struct {
 
 // Pattern is a compiled structural pattern for one language.
 type Pattern struct {
-	lang  *lang.Language
-	src   []byte              // rewritten pattern source
-	metas map[string]metaSpec // sentinel identifier -> spec
-	tree  *sitter.Tree        // kept alive so nodes remain valid
+	lang    *lang.Language
+	src     []byte              // rewritten pattern source
+	metas   map[string]metaSpec // sentinel identifier -> spec
+	opMetas map[uint32]metaSpec // operator-leaf StartByte -> spec ($OP holes)
+	tree    *sitter.Tree        // kept alive so nodes remain valid
 
 	root  *sitter.Node   // single-node pattern root
 	isSeq bool           // sequence pattern (match a run of sibling statements)
 	seq   []*sitter.Node // sequence elements (named children)
+}
+
+// opInsertion records where a $OP operator placeholder was emitted in the
+// rewritten source so the parsed operator leaf can be tagged after parsing.
+type opInsertion struct {
+	offset uint32 // byte offset of the placeholder within the rewritten string
+	name   string // metavariable name (OP, OP1, ...)
+}
+
+// isOperatorName reports whether a metavariable name denotes an operator hole:
+// exactly OP, or OP followed by digits (OP1, OP2, ...). These names are reserved
+// for operator metavariables; use a different name to capture a value node.
+func isOperatorName(name string) bool {
+	if !strings.HasPrefix(name, "OP") {
+		return false
+	}
+	for _, c := range name[2:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func isIdentStartByte(c byte) bool {
@@ -51,9 +75,11 @@ func isIdentContByte(c byte) bool {
 //	$_      -> Lntlanon_<n>     (single, anonymous wildcard)
 //	$$$NAME -> Lntlvr_NAME      (variadic, named)
 //	$$$     -> Lntlvanon_<n>    (variadic, anonymous)
-func rewrite(pattern string) (string, map[string]metaSpec) {
+//	$OP     -> ==               (operator hole; the leaf is tagged after parsing)
+func rewrite(pattern string) (string, map[string]metaSpec, []opInsertion) {
 	var b strings.Builder
 	metas := map[string]metaSpec{}
+	var ops []opInsertion
 	anon := 0
 	i, n := 0, len(pattern)
 	for i < n {
@@ -116,13 +142,16 @@ func rewrite(pattern string) (string, map[string]metaSpec) {
 			sent := fmt.Sprintf("Lntlanon_%d", anon)
 			metas[sent] = metaSpec{kind: mvSingle, anon: true}
 			b.WriteString(sent)
+		case isOperatorName(name): // operator hole: $OP, $OP1, ...
+			ops = append(ops, opInsertion{offset: uint32(b.Len()), name: name})
+			b.WriteString("==") // binary placeholder; bound to the real operator at match time
 		default: // named single
 			sent := "Lntlmv_" + name
 			metas[sent] = metaSpec{name: name, kind: mvSingle}
 			b.WriteString(sent)
 		}
 	}
-	return b.String(), metas
+	return b.String(), metas, ops
 }
 
 // scaffold wraps a pattern in surrounding code so that expression and
@@ -175,7 +204,7 @@ var scaffolds = map[string][]scaffold{
 // structural shape (single node vs. statement sequence). It tries the raw
 // pattern first, then wraps it in scaffolding contexts until one parses.
 func compilePattern(l *lang.Language, raw string) (*Pattern, error) {
-	rewritten, metas := rewrite(raw)
+	rewritten, metas, ops := rewrite(raw)
 	parser := sitter.NewParser()
 	parser.SetLanguage(l.Grammar())
 
@@ -200,6 +229,16 @@ func compilePattern(l *lang.Language, raw string) (*Pattern, error) {
 			continue
 		}
 		p := &Pattern{lang: l, src: []byte(full), metas: metas, tree: tree}
+		if len(ops) > 0 {
+			p.opMetas = map[uint32]metaSpec{}
+			for _, ins := range ops {
+				if leaf := leafAt(root, bs+ins.offset); leaf != nil {
+					p.opMetas[leaf.StartByte()] = metaSpec{name: ins.name, kind: mvOperator}
+				} else {
+					return nil, fmt.Errorf("operator metavariable $%s is not in operator position in pattern %q", ins.name, raw)
+				}
+			}
+		}
 		if len(nodes) == 1 {
 			core := unwrapTransparent(unwrap(nodes[0]), l)
 			if wrapperKinds[core.Type()] && core.NamedChildCount() > 1 {
@@ -251,6 +290,18 @@ func topNodesInRange(root *sitter.Node, start, end uint32, l *lang.Language) []*
 	return out
 }
 
+// leafAt returns the leaf node (no children) starting exactly at byte offset off,
+// used to locate an operator placeholder after parsing.
+func leafAt(root *sitter.Node, off uint32) *sitter.Node {
+	var found *sitter.Node
+	walk(root, func(n *sitter.Node) {
+		if found == nil && n.ChildCount() == 0 && n.StartByte() == off {
+			found = n
+		}
+	})
+	return found
+}
+
 // DebugPattern compiles a raw pattern and returns a human-readable description
 // of its resolved structure. Used by `lint parse --pattern`.
 func DebugPattern(l *lang.Language, raw string) (string, error) {
@@ -277,8 +328,13 @@ func (p *Pattern) metaOf(n *sitter.Node) (metaSpec, bool) {
 	if n.ChildCount() != 0 {
 		return metaSpec{}, false
 	}
-	s, ok := p.metas[n.Content(p.src)]
-	return s, ok
+	if s, ok := p.metas[n.Content(p.src)]; ok {
+		return s, true
+	}
+	if s, ok := p.opMetas[n.StartByte()]; ok {
+		return s, true
+	}
+	return metaSpec{}, false
 }
 
 // text returns a pattern node's source text.

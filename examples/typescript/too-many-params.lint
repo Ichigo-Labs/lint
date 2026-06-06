@@ -1,0 +1,17 @@
+rule too-many-params {
+  message  "$F has a long parameter list; group related arguments into an options object"
+  severity warning
+  in       typescript
+  tags     readability, maintainability
+  url      "https://refactoring.guru/smells/long-parameter-list"
+  note     "Functions with many positional parameters are hard to call correctly. An options object documents each argument at the call site."
+
+  # $$$PARAMS captures the parameter run; `count` constrains how many there are.
+  pattern { function $F($$$PARAMS) { $$$ } }
+  where    $PARAMS count > 4
+
+  test {
+    match    "function build(a, b, c, d, e) { return a }"
+    no_match "function add(a, b) { return a + b }"
+  }
+}

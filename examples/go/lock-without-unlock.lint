@@ -1,0 +1,16 @@
+rule lock-without-unlock {
+  message  "$MU.Lock() has no matching $MU.Unlock() later in the same block"
+  severity warning
+  in       go
+  tags     concurrency
+  note     "A Lock with no corresponding Unlock in the same block leaks the lock. Prefer `defer mu.Unlock()` immediately after locking."
+
+  # `not follows` checks the later siblings in the same block.
+  pattern { $MU.Lock() }
+  not follows pattern { $MU.Unlock() }
+
+  test {
+    match    "package p\nfunc f() { mu.Lock(); work() }"
+    no_match "package p\nfunc f() { mu.Lock(); work(); mu.Unlock() }"
+  }
+}

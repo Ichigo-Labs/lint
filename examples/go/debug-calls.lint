@@ -1,0 +1,17 @@
+# A file-level `let` defines a named list reused by the rule's `where`.
+let DEBUG_FUNCS = [Println, Printf, Print]
+
+rule debug-print-call {
+  message  "fmt.$M is debug output; remove it or switch to a structured logger"
+  severity warning
+  in       go
+  tags     cleanup, debug
+
+  pattern { fmt.$M($$$) }
+  where    $M in @DEBUG_FUNCS
+
+  test {
+    match    "package p\nfunc f() { fmt.Println(\"x\") }"
+    no_match "package p\nfunc f() string { return fmt.Sprintf(\"x\") }"
+  }
+}

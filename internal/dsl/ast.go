@@ -25,6 +25,8 @@ type Rule struct {
 	Note      string
 	Severity  Severity
 	Languages []string // names/aliases as written; resolved by the engine
+	URL       string   // optional link to a longer explanation / style-guide entry
+	Tags      []string // optional free-form labels (for `--tag` filtering, JSON output)
 
 	// Match is the root matcher: a pattern, a raw query, or an any/all/not
 	// combination of those. It produces candidate nodes plus metavar bindings.
@@ -45,6 +47,16 @@ type Rule struct {
 
 	File string
 	Pos  Position
+}
+
+// LetDef is a file-level `let NAME = ...` definition: either a membership list
+// or a regex, referenced as @NAME in a `where` clause. References are resolved
+// at parse time, so the engine never sees a LetDef.
+type LetDef struct {
+	IsRegex bool
+	Text    string   // regex source (when IsRegex)
+	List    []string // membership items (when !IsRegex)
+	Pos     Position
 }
 
 // MatcherKind discriminates the Matcher union.
@@ -82,6 +94,16 @@ const (
 	RelNotInside                     // candidate is not inside a match
 	RelHas                           // candidate contains (ancestor of) a match
 	RelNotHas                        // candidate does not contain a match
+
+	RelPrecedes    // candidate has an earlier same-block sibling matching
+	RelNotPrecedes // candidate has no earlier same-block sibling matching
+	RelFollows     // candidate has a later same-block sibling matching
+	RelNotFollows  // candidate has no later same-block sibling matching
+
+	RelDirectlyInside    // candidate's immediate parent matches
+	RelNotDirectlyInside // candidate's immediate parent does not match
+	RelDirectlyHas       // candidate has an immediate child matching
+	RelNotDirectlyHas    // candidate has no immediate child matching
 )
 
 // Relation is a structural context filter on a candidate node. Inside/Has
@@ -109,6 +131,16 @@ const (
 	ConNeqText                          // $X != "literal"
 	ConPattern                          // $X is pattern{...}/query: capture matches a sub-matcher
 	ConNotPattern                       // $X is not ...
+	ConNumGt                            // $X > n   (capture parsed as a number)
+	ConNumGe                            // $X >= n
+	ConNumLt                            // $X < n
+	ConNumLe                            // $X <= n
+	ConCountGt                          // $X count > n   (number of nodes a variadic captured)
+	ConCountGe                          // $X count >= n
+	ConCountLt                          // $X count < n
+	ConCountLe                          // $X count <= n
+	ConCountEq                          // $X count == n
+	ConCountNe                          // $X count != n
 )
 
 // Constraint is one `where` predicate over a captured metavariable.

@@ -18,8 +18,14 @@ const (
 	tLBrack
 	tRBrack
 	tComma
+	tAt // @name reference to a `let` definition (in where clauses)
+	tEq // single '=' (used by `let NAME = ...`)
 	tEqEq
 	tBangEq
+	tLt // <
+	tGt // >
+	tLe // <=
+	tGe // >=
 )
 
 type token struct {
@@ -50,10 +56,22 @@ func (t token) String() string {
 		return "]"
 	case tComma:
 		return ","
+	case tAt:
+		return "@" + t.val
+	case tEq:
+		return "="
 	case tEqEq:
 		return "=="
 	case tBangEq:
 		return "!="
+	case tLt:
+		return "<"
+	case tGt:
+		return ">"
+	case tLe:
+		return "<="
+	case tGe:
+		return ">="
 	}
 	return "?"
 }
@@ -164,11 +182,13 @@ func (l *lexer) next() (token, error) {
 		return token{kind: tComma, pos: pos}, nil
 	case c == '=':
 		l.advance()
-		if l.eof() || l.cur() != '=' {
-			return token{}, l.errf(pos, "expected '==' (single '=' is not valid)")
+		if !l.eof() && l.cur() == '=' {
+			l.advance()
+			return token{kind: tEqEq, pos: pos}, nil
 		}
-		l.advance()
-		return token{kind: tEqEq, pos: pos}, nil
+		// A single '=' is only meaningful in `let NAME = ...`; in a `where`
+		// comparison the parser rejects it with a "use ==" hint.
+		return token{kind: tEq, pos: pos}, nil
 	case c == '!':
 		l.advance()
 		if l.eof() || l.cur() != '=' {
@@ -176,6 +196,30 @@ func (l *lexer) next() (token, error) {
 		}
 		l.advance()
 		return token{kind: tBangEq, pos: pos}, nil
+	case c == '<':
+		l.advance()
+		if !l.eof() && l.cur() == '=' {
+			l.advance()
+			return token{kind: tLe, pos: pos}, nil
+		}
+		return token{kind: tLt, pos: pos}, nil
+	case c == '>':
+		l.advance()
+		if !l.eof() && l.cur() == '=' {
+			l.advance()
+			return token{kind: tGe, pos: pos}, nil
+		}
+		return token{kind: tGt, pos: pos}, nil
+	case c == '@':
+		l.advance()
+		if l.eof() || !isIdentStart(l.cur()) {
+			return token{}, l.errf(pos, "expected a name after '@'")
+		}
+		start := l.pos
+		for !l.eof() && isIdentCont(l.cur()) {
+			l.advance()
+		}
+		return token{kind: tAt, val: l.src[start:l.pos], pos: pos}, nil
 	case c == '"':
 		s, err := l.readDoubleString()
 		if err != nil {
@@ -202,6 +246,14 @@ func (l *lexer) next() (token, error) {
 		start := l.pos
 		for !l.eof() && isDigit(l.cur()) {
 			l.advance()
+		}
+		// Optional fractional part, e.g. 3.5 (a trailing dot with no digit, as in
+		// a range or method call, is left for the next token).
+		if !l.eof() && l.cur() == '.' && l.pos+1 < len(l.src) && isDigit(l.src[l.pos+1]) {
+			l.advance() // '.'
+			for !l.eof() && isDigit(l.cur()) {
+				l.advance()
+			}
 		}
 		return token{kind: tNumber, val: l.src[start:l.pos], pos: pos}, nil
 	case isIdentStart(c):

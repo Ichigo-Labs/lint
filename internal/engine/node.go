@@ -25,6 +25,20 @@ var transparentKinds = map[string]bool{
 	"global_statement":     true, // c# top-level statements
 }
 
+// blockKinds are the statement-list containers across the supported grammars: a
+// candidate and its sibling statements share one of these as their nearest
+// common parent. Used by the precedes/follows relations to scope "same block".
+var blockKinds = map[string]bool{
+	"block":              true, // go, python, java, rust, c#
+	"statement_block":    true, // ts/tsx/js
+	"compound_statement": true, // c, c++
+	"source_file":        true, // go, rust (top level)
+	"module":             true, // python (top level)
+	"program":            true, // ts/js, java (top level)
+	"translation_unit":   true, // c, c++ (top level)
+	"compilation_unit":   true, // c# (top level)
+}
+
 // terminatorKinds are anonymous statement/list separators that carry no
 // structural meaning for matching. Dropping them (on both pattern and target
 // sides) lets `throw $X` match `throw e;`, makes block arity robust across

@@ -1,0 +1,17 @@
+rule self-comparison-operator {
+  message  "both operands of `$OP` are identical (`$X $OP $X`); this is almost always a bug"
+  severity warning
+  in       go
+  tags     correctness
+  note     "Comparing or combining a value with itself (a == a, a & a, a - a) is redundant or a copy/paste mistake. $OP captures whichever operator was used."
+
+  # $OP is an operator metavariable: it binds the operator token, so this one
+  # rule covers ==, !=, <, &, -, ... while $X back-references the operand.
+  pattern { $X $OP $X }
+
+  test {
+    match    "package p\nfunc f(a int) bool { return a == a }"
+    match    "package p\nfunc f(a int) int { return a - a }"
+    no_match "package p\nfunc f(a, b int) bool { return a == b }"
+  }
+}

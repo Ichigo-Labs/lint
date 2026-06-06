@@ -11,3 +11,6 @@ coverage.*
 # Editor/OS
 .DS_Store
 *.swp
+
+# Claude Code session state
+.claude/

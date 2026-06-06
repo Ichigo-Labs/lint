@@ -10,14 +10,17 @@ This document is the complete reference. For a task-oriented walkthrough, see
 - [File structure](#file-structure)
 - [Strings and bodies](#strings-and-bodies)
 - [Rule fields](#rule-fields)
-- [Metavariables](#metavariables)
+- [Metavariables](#metavariables) — including [operator metavariables](#operator-metavariables)
+- [`let` definitions](#let-definitions)
 - [How matching works](#how-matching-works)
 - [Matcher clauses](#matcher-clauses) — `pattern`, `query`, `any`, `all`, `not`
-- [Relation clauses](#relation-clauses) — `inside`, `has`, and negations
-- [`where` constraints](#where-constraints)
+- [Relation clauses](#relation-clauses) — `inside`, `has`, `precedes`, `follows`, `directly`, and negations
+- [`where` constraints](#where-constraints) — regex, kind, membership, numeric, `count`, sub-pattern
 - [`fix`](#fix)
 - [`test`](#test)
 - [Severity and exit codes](#severity-and-exit-codes)
+- [Suppressing findings](#suppressing-findings)
+- [Project configuration](#project-configuration)
 
 ## File structure
 
@@ -84,6 +87,8 @@ is exactly the pattern `foo()`.
 | `severity` | — | `error`, `warning` (default), or `info`. `warn` is accepted for `warning`. |
 | `note` | `help` | An optional longer explanation printed under the finding. |
 | `in` | `language`, `languages` | Comma-separated languages this rule applies to, e.g. `in go, typescript`. If omitted, the rule is compiled for **every** language whose grammar can parse its pattern. |
+| `url` | `link` | An optional link to a longer explanation / style-guide entry. Surfaced in `--json`. |
+| `tags` | `tag` | Comma-separated free-form labels, e.g. `tags security, correctness`. Surfaced in `--json` and selectable with `lint check --tag`. |
 
 `message` and `note` expand `$NAME` / `$$$NAME` placeholders using the rule's
 captured metavariables. For example, with `pattern { fmt.$M($$$) }`:
@@ -104,6 +109,31 @@ A metavariable is a hole in a pattern that captures a piece of the syntax tree.
 | `$_` | One anonymous node (wildcard). Not captured; cannot be referenced later. |
 | `$$$NAME` | Zero or more nodes — a *run* of arguments, parameters, or statements. Captured (the spanned text). |
 | `$$$` | Anonymous variadic (zero or more, not captured). `$$NAME` / `$$` are also variadic. |
+| `$OP` | An **operator** hole in a binary/comparison expression: `$A $OP $B` matches any operator and binds it. The names `$OP`, `$OP1`, `$OP2`, … are reserved for this; reuse back-references the operator text. See [operator metavariables](#operator-metavariables). |
+
+Every match also exposes an implicit **`$match`** binding — the whole matched
+span — usable in `where`, `message`, and `fix`. For a `query`, an explicit
+`@match`/`@target` capture takes precedence over the implicit one.
+
+### Operator metavariables
+
+`$OP` lets one pattern cover a whole family of operators. `$A $OP $B` compiles to
+a binary/comparison expression and binds `$OP` to whichever operator the target
+uses, so you can constrain or report it:
+
+```
+rule self-comparison-operator {
+  message "both operands of `$OP` are identical (`$X $OP $X`)"
+  in      go
+  pattern { $X $OP $X }   # matches a == a, a - a, a & a, ...
+}
+```
+
+Constrain the operator with `where` — operators must be quoted (they are not
+identifiers), e.g. `where $OP in ["==", "!="]`. Scope notes: the placeholder is a
+binary operator, so `$A $OP $B` matches binary/comparison nodes (in Python,
+specifically `comparison_operator`, not arithmetic `binary_operator`). Putting
+`$OP` outside operator position (e.g. `foo($OP)`) is a compile error.
 
 Names follow identifier rules (letters, digits, `_`). A back-reference compares
 *text*, so `$X == $X` matches `a == a` but not `a == b`.
@@ -113,6 +143,34 @@ Only **named** metavariables produce bindings usable in `message`, `note`,
 
 > A pattern that is **nothing but a single metavariable** (e.g. `pattern { $X }`)
 > is rejected, because it would match every node.
+
+## `let` definitions
+
+A file may define named, reusable lists and regexes with `let`, then reference
+them as `@NAME` in a `where` clause. Definitions are **file-scoped** (visible to
+every rule in the file) and may appear at the top of the file or between rules:
+
+```
+let DEBUG = [Println, Printf, Print]
+let ERRNAME = "(?i)err"
+
+rule no-debug-print {
+  in      go
+  pattern { fmt.$M($$$) }
+  where   $M in @DEBUG          # same as: where $M in [Println, Printf, Print]
+}
+
+rule error-compare {
+  in      go
+  pattern { $E == $_ }
+  where   $E matches @ERRNAME    # same as: where $E matches "(?i)err"
+}
+```
+
+A `[ ... ]` definition can only be used with `in` (and `not in`); a `"..."`
+definition only with `matches` (and `not matches`). Referencing an undefined or
+wrong-typed name is a parse error. References are resolved at parse time, so a
+`let` is pure sugar — the engine sees an ordinary `in`/`matches` constraint.
 
 ## How matching works
 
@@ -388,6 +446,39 @@ rule unchecked-malloc {
 Note how `$PV` is bound by the `has` pattern and then reused in the `not has`
 patterns — relations share bindings.
 
+### `precedes` / `follows` (and negations)
+
+These filter by an **earlier** or **later sibling in the same block**. They look
+through statement wrappers, so a statement pattern matches against the sibling
+statements at the enclosing block level. A classic use is "a `Lock` with no later
+`Unlock` in the same block":
+
+```
+rule lock-without-unlock {
+  in      go
+  pattern { $MU.Lock() }
+  not follows pattern { $MU.Unlock() }   # no later sibling unlocks the same mutex
+}
+```
+
+`precedes pattern { ... }` is the mirror image (an *earlier* sibling matches), and
+`not precedes` / `not follows` negate. The sibling matcher shares bindings with
+the candidate, so `$MU` above must be the same mutex on both sides.
+
+### `directly inside` / `directly has` (and negations)
+
+The depth-1 forms of `inside` / `has`: `directly inside` matches the candidate's
+**immediate parent**, and `directly has` matches an **immediate child** (rather
+than any ancestor/descendant). `not directly inside` / `not directly has` negate.
+
+```
+rule operand-of-plus {
+  in      go
+  pattern { x }
+  directly inside pattern { $A + $B }   # x is an immediate operand of `+`
+}
+```
+
 ## `where` constraints
 
 `where` adds a predicate over a **captured** metavariable. Multiple `where`
@@ -402,15 +493,43 @@ to never fire on that candidate, so only constrain names you actually capture.
 | `$X not kind <node_type>` | the kind differs (or there is no node, e.g. a variadic) |
 | `$X in [a, b, "c"]` | the text equals one of the listed items |
 | `$X not in [...]` | the text is none of them |
+| `$X in @NAME` | the text is in a `let` list (`not in @NAME` negates) |
+| `$X matches @NAME` | the text matches a `let` regex (`not matches @NAME` negates) |
 | `$X == $Y` | two captures have equal text |
 | `$X != $Y` | two captures differ |
 | `$X == "lit"` | the text equals the literal |
 | `$X != "lit"` | the text differs from the literal |
+| `$X > n` / `>= n` / `< n` / `<= n` | the capture parses as a number satisfying the bound (a non-numeric capture never matches) |
+| `$X count > n` (`>= < <= == !=`) | the number of nodes a variadic captured satisfies the bound |
 | `$X is pattern { ... }` | the captured subtree (or a descendant) matches the sub-pattern |
 | `$X is not pattern { ... }` | it does not match the sub-pattern |
 
 List items may be bare identifiers, strings, or numbers. The right side of `is` /
-`is not` may be a `pattern { ... }` **or** a `query "..."`.
+`is not` may be a `pattern { ... }` **or** a `query "..."`. Number literals may be
+integers or decimals (`3`, `60000`, `2.5`).
+
+### Numeric comparisons and `count`
+
+`>`, `<`, `>=`, `<=` compare a capture's text **as a number** — handy for magic
+thresholds. A capture that is not numeric simply fails the predicate (it is not
+an error):
+
+```
+pattern { setTimeout($_, $MS) }
+where   $MS > 60000
+```
+
+`count` counts how many nodes a **variadic** (`$$$NAME`) absorbed — arguments,
+parameters, or statements — so you can flag arity. A single (non-variadic)
+capture counts as 1:
+
+```
+pattern { function $F($$$PARAMS) { $$$ } }
+where   $PARAMS count > 4        # functions with more than four parameters
+```
+
+> Variadics are referenced in `where` with a single `$` (e.g. `$PARAMS`), the
+> same name as the `$$$PARAMS` that captured them.
 
 ### `matches` / `not matches`
 
@@ -652,3 +771,43 @@ See [writing-rules.md](writing-rules.md#test-snippets-must-parse) for details.
 - `--quiet` shows only `error` findings.
 
 `lint test` exits non-zero if any case fails or any rule fails to load.
+
+## Suppressing findings
+
+A source comment can silence findings on a line. The directive works in every
+language's comment syntax (`//`, `#`, `/* */`):
+
+```go
+score := compute() // lint:ignore no-magic            // silence no-magic here
+total := score*2   // lint:ignore                       // silence ALL rules here
+
+// lint:ignore-next-line no-panic
+panic("boom")                                            // silenced by the line above
+```
+
+- `lint:ignore [ids]` silences the listed rules on the **same** line; with no
+  ids, it silences **all** rules on that line.
+- `lint:ignore-next-line [ids]` silences the **following** line.
+- Multiple ids are comma-separated (`lint:ignore a,b`); text after the ids is
+  treated as a human explanation and ignored.
+
+## Project configuration
+
+An optional `.lint.toml` (or `lint.toml`) at the project root disables rules or
+overrides their severity without editing the rule files — useful for tuning a
+shared ruleset per project:
+
+```toml
+# Disable rules everywhere.
+disable = ["no-console", "experimental-rule"]
+
+# Or configure a single rule.
+[rules.no-println]
+severity = "error"      # promote a warning to an error
+
+[rules.legacy-check]
+enabled = false         # same as adding it to `disable`
+```
+
+Precedence, highest first: an inline `lint:ignore` comment, then project config
+(disable / severity), then the rule's own `severity`.
