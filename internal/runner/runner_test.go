@@ -6,8 +6,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ichigo-labs/lintel/internal/dsl"
-	"github.com/ichigo-labs/lintel/internal/engine"
+	"github.com/ichigo-labs/lint/internal/dsl"
+	"github.com/ichigo-labs/lint/internal/engine"
 )
 
 // writeFile creates path's parent directories and writes content.
@@ -28,13 +28,13 @@ func writeFile(t *testing.T, path, content string) {
 // Layout:
 //
 //	<root>/
-//	  .lintel/root.lint        rule no_console (typescript): console.log($$$)
+//	  .lint/root.lint        rule no_console (typescript): console.log($$$)
 //	  src/
 //	    app.ts                 console.log -> flagged by no_console
 //	    util.go                no panic / no console -> clean
 //	    notes.txt              console.log text, but .txt is not a known language
 //	  pkg/
-//	    .lintel/nested.lint    rule no_panic (go): panic($$$), scoped to pkg/
+//	    .lint/nested.lint    rule no_panic (go): panic($$$), scoped to pkg/
 //	    core.go                panic -> flagged by no_panic (in scope)
 //	    widget.ts              console.log -> flagged by no_console (root applies here)
 //	  other/
@@ -49,13 +49,13 @@ func setupProject(t *testing.T) string {
 		root = resolved
 	}
 
-	writeFile(t, filepath.Join(root, ".lintel", "root.lint"), `rule no_console {
+	writeFile(t, filepath.Join(root, ".lint", "root.lint"), `rule no_console {
   in typescript
   message "avoid console.log"
   pattern { console.log($$$) }
 }`)
 
-	writeFile(t, filepath.Join(root, "pkg", ".lintel", "nested.lint"), `rule no_panic {
+	writeFile(t, filepath.Join(root, "pkg", ".lint", "nested.lint"), `rule no_panic {
   in go
   message "avoid panic"
   pattern { panic($$$) }
@@ -115,7 +115,7 @@ func equalStrings(a, b []string) bool {
 }
 
 // TestLoadDiscoversRules checks that Load finds rules from both the root and a
-// nested .lintel directory.
+// nested .lint directory.
 func TestLoadDiscoversRules(t *testing.T) {
 	setupProject(t)
 
@@ -142,8 +142,8 @@ func TestLoadDiscoversRules(t *testing.T) {
 }
 
 // TestCheckScopeAndPaths verifies that:
-//   - a root .lintel rule applies across the whole tree (src/ and nested pkg/),
-//   - a nested .lintel rule applies only to its own subtree (pkg/, not other/),
+//   - a root .lint rule applies across the whole tree (src/ and nested pkg/),
+//   - a nested .lint rule applies only to its own subtree (pkg/, not other/),
 //   - findings carry file paths relative to the working directory,
 //   - files with unknown extensions (.txt) are not selected.
 func TestCheckScopeAndPaths(t *testing.T) {
@@ -238,7 +238,7 @@ func TestExtensionMappingSelectsFiles(t *testing.T) {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
-	writeFile(t, filepath.Join(root, ".lintel", "r.lint"), `rule no_console {
+	writeFile(t, filepath.Join(root, ".lint", "r.lint"), `rule no_console {
   in typescript
   pattern { console.log($$$) }
 }`)
@@ -268,9 +268,9 @@ func TestExtensionMappingSelectsFiles(t *testing.T) {
 func TestRulesDirOverride(t *testing.T) {
 	root := setupProject(t)
 
-	// Use only the nested pkg/.lintel as an override; it should now apply
+	// Use only the nested pkg/.lint as an override; it should now apply
 	// everywhere, including other/helper.go which is normally out of scope.
-	override := filepath.Join(root, "pkg", ".lintel")
+	override := filepath.Join(root, "pkg", ".lint")
 	rs, lerrs, err := Load(".", override)
 	if err != nil {
 		t.Fatalf("Load: %v", err)

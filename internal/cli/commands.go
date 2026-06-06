@@ -9,10 +9,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ichigo-labs/lintel/internal/dsl"
-	"github.com/ichigo-labs/lintel/internal/engine"
-	"github.com/ichigo-labs/lintel/internal/lang"
-	"github.com/ichigo-labs/lintel/internal/runner"
+	"github.com/ichigo-labs/lint/internal/dsl"
+	"github.com/ichigo-labs/lint/internal/engine"
+	"github.com/ichigo-labs/lint/internal/lang"
+	"github.com/ichigo-labs/lint/internal/runner"
 )
 
 // --- test ----------------------------------------------------------------
@@ -68,7 +68,7 @@ func newTestCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().String("rules", "", "directory of .lint rules (default: discover .lintel/)")
+	cmd.Flags().String("rules", "", "directory of .lint rules (default: discover .lint/)")
 	cmd.Flags().Bool("no-color", false, "disable colored output")
 	return cmd
 }
@@ -117,7 +117,7 @@ func newListCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().String("rules", "", "directory of .lint rules (default: discover .lintel/)")
+	cmd.Flags().String("rules", "", "directory of .lint rules (default: discover .lint/)")
 	return cmd
 }
 
@@ -130,8 +130,8 @@ func newParseCmd() *cobra.Command {
 		Short: "Print the syntax tree of a file, or how a pattern compiles",
 		Long: `parse helps author rules.
 
-  lintel parse path/to/file.go              # print the file's syntax tree
-  lintel parse --lang go --pattern 'a + b'  # show how a pattern resolves`,
+  lint parse path/to/file.go              # print the file's syntax tree
+  lint parse --lang go --pattern 'a + b'  # show how a pattern resolves`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if pattern != "" {
@@ -188,7 +188,7 @@ func newNewCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if dir == "" {
-				dir = ".lintel"
+				dir = ".lint"
 			}
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
@@ -225,7 +225,7 @@ func newNewCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&langName, "lang", "", "language for the rule's `in` clause")
-	cmd.Flags().StringVar(&dir, "dir", "", "directory to create the rule in (default: .lintel)")
+	cmd.Flags().StringVar(&dir, "dir", "", "directory to create the rule in (default: .lint)")
 	return cmd
 }
 

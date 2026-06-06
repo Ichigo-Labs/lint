@@ -1,4 +1,4 @@
-module github.com/ichigo-labs/lintel
+module github.com/ichigo-labs/lint
 
 go 1.26.4
 

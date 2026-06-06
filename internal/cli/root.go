@@ -1,4 +1,4 @@
-// Package cli wires the lintel command-line interface.
+// Package cli wires the lint command-line interface.
 package cli
 
 import (
@@ -11,25 +11,25 @@ import (
 // version is overridden at build time with -ldflags.
 var version = "0.1.0-dev"
 
-// Execute runs the lintel CLI.
+// Execute runs the lint CLI.
 func Execute() {
 	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "lintel:", err)
+		fmt.Fprintln(os.Stderr, "lint:", err)
 		os.Exit(2)
 	}
 }
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "lintel [paths...]",
-		Short: "lintel — write project lint rules fast, run them across many languages",
-		Long: `lintel finds rule violations in your code using structural patterns.
+		Use:   "lint [paths...]",
+		Short: "lint — write project lint rules fast, run them across many languages",
+		Long: `lint finds rule violations in your code using structural patterns.
 
-Rules live in .lintel/ directories as NAME.lint files written in a small DSL
+Rules live in .lint/ directories as NAME.lint files written in a small DSL
 that matches code by its syntax tree (not regex), across C#, Java, C/C++, Rust,
 Go, TypeScript, and Python.
 
-Running 'lintel' with no subcommand checks the current directory.`,
+Running 'lint' with no subcommand checks the current directory.`,
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

@@ -1,4 +1,4 @@
-// Package lang is the registry of languages lintel understands. It maps
+// Package lang is the registry of languages lint understands. It maps
 // human language names and file extensions onto Tree-sitter grammars, and
 // records a small amount of per-language metadata the engine uses to reason
 // about patterns (which node kinds count as identifiers, literals, comments).

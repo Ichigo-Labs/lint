@@ -1,6 +1,6 @@
 # The `.lint` DSL reference
 
-A `.lint` file describes one or more **rules**. Each rule tells lintel what code
+A `.lint` file describes one or more **rules**. Each rule tells lint what code
 to flag (a structural pattern), what to say (a message), and — optionally — how
 to fix it and how to test it.
 
@@ -129,7 +129,7 @@ Matching is **structural** over the Tree-sitter syntax tree:
 You can inspect how any pattern compiles:
 
 ```
-$ lintel parse --lang go --pattern 'fmt.Println($$$ARGS)'
+$ lint parse --lang go --pattern 'fmt.Println($$$ARGS)'
 kind: call_expression
 (call_expression function: (selector_expression operand: (identifier) field: (field_identifier)) arguments: (argument_list (identifier)))
 ```
@@ -138,7 +138,7 @@ A multi-statement pattern compiles to a *sequence* that matches a run of adjacen
 statements:
 
 ```
-$ lintel parse --lang python --pattern 'x = 1
+$ lint parse --lang python --pattern 'x = 1
 y = 2'
 sequence of 2 nodes:
   (expression_statement (assignment left: (identifier) right: (integer)))
@@ -451,7 +451,7 @@ rule print-not-f {
 ### `kind` / `not kind`
 
 `kind` checks the captured node's Tree-sitter type (discover types with
-`lintel parse <file>`). Use `not kind` to exclude a shape:
+`lint parse <file>`). Use `not kind` to exclude a shape:
 
 ```
 rule eq-not-selector {
@@ -578,7 +578,7 @@ rule eq-lhs-not-call {
 
 ## `fix`
 
-`fix` is a rewrite template. When a rule matches, `lintel check --fix` replaces
+`fix` is a rewrite template. When a rule matches, `lint check --fix` replaces
 the matched span with the expanded template. Use the same `$NAME` / `$$$NAME`
 placeholders as the pattern.
 
@@ -599,7 +599,7 @@ rule errors-new-sprintf {
 Running it:
 
 ```
-$ lintel check --fix
+$ lint check --fix
 applied 1 fix(es) across 1 file(s)
 ```
 
@@ -608,7 +608,7 @@ outermost-first; conflicting overlaps are skipped.
 
 ## `test`
 
-Inline tests live in a `test { ... }` block and run with `lintel test`. Each
+Inline tests live in a `test { ... }` block and run with `lint test`. Each
 entry is a snippet that either should or should not trigger the rule.
 
 | Keyword | Aliases | Asserts |
@@ -636,7 +636,7 @@ func f() { panic(1); panic(2) }
 Run them:
 
 ```
-$ lintel test
+$ lint test
 6 rule(s), 16 case(s): 16 passed, 0 failed
 ```
 
@@ -646,9 +646,9 @@ See [writing-rules.md](writing-rules.md#test-snippets-must-parse) for details.
 
 ## Severity and exit codes
 
-- `severity error` findings make `lintel check` exit non-zero.
+- `severity error` findings make `lint check` exit non-zero.
 - `warning` and `info` do not affect the exit code by default.
 - `--error-on-warning` makes warnings (and errors) fail the run.
 - `--quiet` shows only `error` findings.
 
-`lintel test` exits non-zero if any case fails or any rule fails to load.
+`lint test` exits non-zero if any case fails or any rule fails to load.

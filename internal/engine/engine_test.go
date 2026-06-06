@@ -3,8 +3,8 @@ package engine
 import (
 	"testing"
 
-	"github.com/ichigo-labs/lintel/internal/dsl"
-	"github.com/ichigo-labs/lintel/internal/lang"
+	"github.com/ichigo-labs/lint/internal/dsl"
+	"github.com/ichigo-labs/lint/internal/lang"
 )
 
 func run(t *testing.T, langName, ruleSrc, code string) []Finding {

@@ -7,7 +7,7 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 
-	"github.com/ichigo-labs/lintel/internal/lang"
+	"github.com/ichigo-labs/lint/internal/lang"
 )
 
 type metaKind int
@@ -252,7 +252,7 @@ func topNodesInRange(root *sitter.Node, start, end uint32, l *lang.Language) []*
 }
 
 // DebugPattern compiles a raw pattern and returns a human-readable description
-// of its resolved structure. Used by `lintel parse --pattern`.
+// of its resolved structure. Used by `lint parse --pattern`.
 func DebugPattern(l *lang.Language, raw string) (string, error) {
 	p, err := compilePattern(l, raw)
 	if err != nil {

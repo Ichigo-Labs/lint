@@ -40,7 +40,7 @@ type Rule struct {
 	// the rule is not auto-fixable.
 	Fix *string
 
-	// Tests are inline examples used by `lintel test`.
+	// Tests are inline examples used by `lint test`.
 	Tests []TestCase
 
 	File string
@@ -133,7 +133,7 @@ const (
 	ExpectNoMatch                        // the rule should stay silent here
 )
 
-// TestCase is one inline example for `lintel test`.
+// TestCase is one inline example for `lint test`.
 type TestCase struct {
 	Expect TestExpectation
 	Code   string

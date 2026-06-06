@@ -13,7 +13,7 @@ import (
 // cache.
 func TestConcurrentCheckNoRace(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".lintel"), 0o755)
+	os.MkdirAll(filepath.Join(dir, ".lint"), 0o755)
 	rules := `
 rule r1 { in go
   pattern { if $ERR == nil { return $ERR } } }
@@ -22,7 +22,7 @@ rule r2 { in go
 rule r3 { in go
   pattern { []int{$$$} } }
 `
-	os.WriteFile(filepath.Join(dir, ".lintel", "r.lint"), []byte(rules), 0o644)
+	os.WriteFile(filepath.Join(dir, ".lint", "r.lint"), []byte(rules), 0o644)
 	for i := 0; i < 120; i++ {
 		src := fmt.Sprintf(`package p
 import "fmt"

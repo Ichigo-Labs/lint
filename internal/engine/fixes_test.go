@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ichigo-labs/lintel/internal/dsl"
+	"github.com/ichigo-labs/lint/internal/dsl"
 )
 
 // Statement patterns match regardless of a trailing terminator (`;` / newline).

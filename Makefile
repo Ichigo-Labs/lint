@@ -1,11 +1,11 @@
-# lintel — build/test convenience targets.
+# lint — build/test convenience targets.
 # Requires Go (with CGO enabled) and a C compiler, since the Tree-sitter
 # grammars are compiled in.
 
-BIN      := lintel
-PKG      := ./cmd/lintel
+BIN      := lint
+PKG      := ./cmd/lint
 VERSION  ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
-LDFLAGS  := -X github.com/ichigo-labs/lintel/internal/cli.version=$(VERSION)
+LDFLAGS  := -X github.com/ichigo-labs/lint/internal/cli.version=$(VERSION)
 
 export CGO_ENABLED := 1
 
@@ -13,10 +13,10 @@ export CGO_ENABLED := 1
 
 all: build
 
-build: ## Build the lintel binary
+build: ## Build the lint binary
 	go build -ldflags "$(LDFLAGS)" -o $(BIN) $(PKG)
 
-install: ## Install lintel into GOBIN
+install: ## Install lint into GOBIN
 	go install -ldflags "$(LDFLAGS)" $(PKG)
 
 test: ## Run Go unit tests

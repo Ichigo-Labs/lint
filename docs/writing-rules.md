@@ -4,7 +4,7 @@ A practical guide to authoring `.lint` rules. For the exhaustive syntax, see the
 [DSL reference](dsl.md).
 
 - [The authoring loop](#the-authoring-loop)
-- [Discovering node kinds with `lintel parse`](#discovering-node-kinds-with-lintel-parse)
+- [Discovering node kinds with `lint parse`](#discovering-node-kinds-with-lint-parse)
 - [The metavariable model](#the-metavariable-model)
 - [How patterns compile](#how-patterns-compile)
 - [Common patterns by language](#common-patterns-by-language)
@@ -18,25 +18,25 @@ A practical guide to authoring `.lint` rules. For the exhaustive syntax, see the
 A tight loop keeps rule writing fast:
 
 ```bash
-lintel new my-rule --lang go        # scaffold .lintel/my-rule.lint
-lintel parse --lang go --pattern 'panic($$$)'   # confirm the pattern compiles
-lintel test my-rule                 # run just this rule's inline tests
-lintel check path/to/code           # try it on real code
+lint new my-rule --lang go        # scaffold .lint/my-rule.lint
+lint parse --lang go --pattern 'panic($$$)'   # confirm the pattern compiles
+lint test my-rule                 # run just this rule's inline tests
+lint check path/to/code           # try it on real code
 ```
 
-`lintel new` writes a starter rule with a `pattern`, a commented-out `where`/`fix`,
-and a `test` block. Fill it in, then iterate with `lintel test` until the
-`match`/`no_match` cases pass, and finally run `lintel check`.
+`lint new` writes a starter rule with a `pattern`, a commented-out `where`/`fix`,
+and a `test` block. Fill it in, then iterate with `lint test` until the
+`match`/`no_match` cases pass, and finally run `lint check`.
 
-## Discovering node kinds with `lintel parse`
+## Discovering node kinds with `lint parse`
 
 Two predicates work on node *kinds* — `where $X kind <type>` and the `query`
 escape hatch — so you need to know what Tree-sitter calls each piece of syntax.
-`lintel parse <file>` prints the tree.
+`lint parse <file>` prints the tree.
 
 ```
 $ printf 'package p\nfunc f() { err := io.EOF; _ = err }\n' > d.go
-$ lintel parse d.go
+$ lint parse d.go
 (source_file (package_clause (package_identifier)) (function_declaration name: (identifier) parameters: (parameter_list) body: (block (short_var_declaration left: (expression_list (identifier)) right: (expression_list (selector_expression operand: (identifier) field: (field_identifier)))) ...)))
 ```
 
@@ -47,7 +47,7 @@ To see how a *pattern* (not a file) resolves — its core node kind and the
 s-expression it becomes — use `--lang` + `--pattern`:
 
 ```
-$ lintel parse --lang go --pattern 'fmt.Println($$$ARGS)'
+$ lint parse --lang go --pattern 'fmt.Println($$$ARGS)'
 kind: call_expression
 (call_expression function: (selector_expression operand: (identifier) field: (field_identifier)) arguments: (argument_list (identifier)))
 ```
@@ -92,7 +92,7 @@ where $DST != $SRC
 ## How patterns compile
 
 A pattern is parsed as real code in the target grammar. Because expressions and
-statements can't always sit at a file's top level, lintel **automatically wraps
+statements can't always sit at a file's top level, lint **automatically wraps
 the pattern in scaffolding** (e.g. for Go it tries the raw text, then inside a
 `func`, then as a `var` initializer) until one parses. You therefore write
 patterns as bare fragments — `panic($$$)`, `$X == null`, `using namespace $NS;` —
@@ -102,14 +102,14 @@ A pattern with multiple statements compiles to a **sequence** that matches a run
 of adjacent siblings:
 
 ```
-$ lintel parse --lang python --pattern 'x = 1
+$ lint parse --lang python --pattern 'x = 1
 y = 2'
 sequence of 2 nodes:
   (expression_statement (assignment ...))
   (expression_statement (assignment ...))
 ```
 
-If a pattern fails to compile, `lintel parse --pattern` prints
+If a pattern fails to compile, `lint parse --pattern` prints
 `pattern is not valid <lang>` — fix the syntax (it must be valid code) before
 embedding it in a rule.
 
@@ -160,17 +160,17 @@ pattern { $X == None }
 fix     "$X is None"
 ```
 
-Apply fixes with `lintel check --fix`. Keep fixes behavior-preserving and prefer
+Apply fixes with `lint check --fix`. Keep fixes behavior-preserving and prefer
 fixing the *smallest* span that makes the change correct. When fixes in one file
-overlap, lintel applies the outermost first and skips conflicting ones.
+overlap, lint applies the outermost first and skips conflicting ones.
 
 Test a fix the same way you test matching — a `match` case proves the rule fires;
-combine it with manual `lintel check --fix` on a scratch file to eyeball the
+combine it with manual `lint check --fix` on a scratch file to eyeball the
 rewrite.
 
 ## Tests
 
-Embed `test { ... }` and run `lintel test`. Cover both directions:
+Embed `test { ... }` and run `lint test`. Cover both directions:
 
 ```
 test {
@@ -211,8 +211,8 @@ convenient way to write multi-line snippets; common indentation is stripped.
   comparison operator," use a raw `query` over `binary_expression`.
 
   ```
-  $ lintel parse --lang go --pattern '$A $OP $B'
-  lintel: pattern is not valid go:
+  $ lint parse --lang go --pattern '$A $OP $B'
+  lint: pattern is not valid go:
     $A $OP $B
   ```
 
@@ -246,16 +246,16 @@ convenient way to write multi-line snippets; common indentation is stripped.
 - **`--rules <dir>` is single-directory but global.** It loads the `.lint` files
   directly inside that one directory (not recursively) and applies them to every
   file you check, regardless of where that file lives. For nested, scoped layouts
-  rely on default `.lintel/` discovery instead, which walks ancestors and
-  descendants and scopes each `.lintel/` to its own subtree.
+  rely on default `.lint/` discovery instead, which walks ancestors and
+  descendants and scopes each `.lint/` to its own subtree.
 
 - **Query predicates must sit inside the pattern's parentheses.** Tree-sitter
   treats a top-level `(#eq? ...)` as a separate pattern, so
   `(predefined_type) @x (#eq? @x "any")` silently ignores the predicate. Wrap the
   whole thing: `((predefined_type) @x (#eq? @x "any"))`. For simple equality,
-  prefer the lintel-native `where $x == "any"`, which is evaluated by lintel
+  prefer the lint-native `where $x == "any"`, which is evaluated by lint
   itself and is not subject to this gotcha.
 
-- **Severity vs. exit code.** Only `error` findings fail `lintel check` by
+- **Severity vs. exit code.** Only `error` findings fail `lint check` by
   default. Use `severity error` for things that should block CI, or run with
   `--error-on-warning`.

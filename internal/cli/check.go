@@ -6,12 +6,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ichigo-labs/lintel/internal/dsl"
-	"github.com/ichigo-labs/lintel/internal/engine"
-	"github.com/ichigo-labs/lintel/internal/fix"
-	"github.com/ichigo-labs/lintel/internal/lang"
-	"github.com/ichigo-labs/lintel/internal/report"
-	"github.com/ichigo-labs/lintel/internal/runner"
+	"github.com/ichigo-labs/lint/internal/dsl"
+	"github.com/ichigo-labs/lint/internal/engine"
+	"github.com/ichigo-labs/lint/internal/fix"
+	"github.com/ichigo-labs/lint/internal/lang"
+	"github.com/ichigo-labs/lint/internal/report"
+	"github.com/ichigo-labs/lint/internal/runner"
 )
 
 type checkFlags struct {
@@ -27,7 +27,7 @@ type checkFlags struct {
 
 func addCheckFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
-	f.String("rules", "", "directory of .lint rules (default: discover .lintel/ dirs)")
+	f.String("rules", "", "directory of .lint rules (default: discover .lint/ dirs)")
 	f.Bool("json", false, "emit findings as JSON")
 	f.Bool("no-color", false, "disable colored output")
 	f.Bool("fix", false, "apply autofixes to the working tree")
@@ -80,7 +80,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "rule error: %s\n", le.Error())
 	}
 	if rs.Len() == 0 {
-		fmt.Fprintln(os.Stderr, "no rules found (looked for .lintel/*.lint). Run 'lintel new <name>' to create one.")
+		fmt.Fprintln(os.Stderr, "no rules found (looked for .lint/*.lint). Run 'lint new <name>' to create one.")
 		if len(lerrs) > 0 {
 			os.Exit(2)
 		}

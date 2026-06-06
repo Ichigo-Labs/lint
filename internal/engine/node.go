@@ -3,7 +3,7 @@ package engine
 import (
 	sitter "github.com/smacker/go-tree-sitter"
 
-	"github.com/ichigo-labs/lintel/internal/lang"
+	"github.com/ichigo-labs/lint/internal/lang"
 )
 
 // wrapperKinds are nodes that a pattern snippet acquires merely from being

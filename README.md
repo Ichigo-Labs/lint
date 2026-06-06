@@ -1,7 +1,7 @@
-# lintel
+# lint
 
-**lintel** finds bugs and bad patterns in your code by matching its *syntax
-tree*, not its text. You write small rules in a focused DSL, and lintel runs
+**lint** finds bugs and bad patterns in your code by matching its *syntax
+tree*, not its text. You write small rules in a focused DSL, and lint runs
 them across C, C++, C#, Go, Java, Python, Rust, and TypeScript/JavaScript — one
 rule language for every codebase.
 
@@ -11,7 +11,7 @@ in a minute" spirit, but matching is structural (over a Tree-sitter parse tree)
 instead of line-by-line regex.
 
 ```
-$ lintel check
+$ lint check
 main.go
   6:2  warning use slog instead of fmt.Println [no-println]
      6 |     fmt.Println("hello")
@@ -23,7 +23,7 @@ main.go
 ## Why structural matching?
 
 A grep/regex rule like `fmt\.Println` can't tell `fmt.Println(x)` from
-`myfmt.Println` in a comment, a string, or `fmt.Sprintln`. lintel matches the
+`myfmt.Println` in a comment, a string, or `fmt.Sprintln`. lint matches the
 *shape* of the code:
 
 - **Formatting doesn't matter.** `panic( "x" )`, `panic("x")`, and a `panic`
@@ -34,22 +34,22 @@ A grep/regex rule like `fmt\.Println` can't tell `fmt.Println(x)` from
   `where $X != $Y` finds copy/paste slice bugs that no regex can express.
 
 Compared to per-language linters (ESLint, golangci-lint, Roslyn analyzers),
-lintel trades depth for reach: you get *one* tiny rule language and a fast feedback
-loop (`lintel test`) for project-specific rules across every language in your
+lint trades depth for reach: you get *one* tiny rule language and a fast feedback
+loop (`lint test`) for project-specific rules across every language in your
 repo, without writing a plugin in each ecosystem.
 
 ## Install / build
 
-lintel embeds Tree-sitter grammars, so building it needs **Go and a C compiler
+lint embeds Tree-sitter grammars, so building it needs **Go and a C compiler
 with CGO enabled**.
 
 ```bash
-git clone https://github.com/ichigo-labs/lintel
-cd lintel
-CGO_ENABLED=1 go build -o lintel ./cmd/lintel
+git clone https://github.com/ichigo-labs/lint
+cd lint
+CGO_ENABLED=1 go build -o lint ./cmd/lint
 ```
 
-That produces a `lintel` binary in the current directory. Put it on your `PATH`
+That produces a `lint` binary in the current directory. Put it on your `PATH`
 (or run `make install` to install it into `$GOBIN`). `make` and `make test` are
 also available.
 
@@ -60,10 +60,10 @@ also available.
 
 ```bash
 # 1. Create a rules directory.
-mkdir .lintel
+mkdir .lint
 
 # 2. Write a rule. (A single-rule file may omit the rule{} wrapper.)
-cat > .lintel/no-println.lint <<'EOF'
+cat > .lint/no-println.lint <<'EOF'
 rule no-println {
   message  "use slog instead of fmt.Println"
   severity warning
@@ -73,26 +73,26 @@ rule no-println {
 EOF
 
 # 3. Check the current directory.
-lintel check
+lint check
 ```
 
 Useful commands while authoring:
 
 ```bash
-lintel list                          # show discovered rules
-lintel test                          # run rules' inline test blocks
-lintel parse --lang go --pattern 'fmt.Println($$$)'   # see how a pattern compiles
-lintel parse main.go                 # dump a file's syntax tree (find node kinds)
-lintel new my-rule --lang go         # scaffold a new rule
-lintel langs                         # list supported languages
+lint list                          # show discovered rules
+lint test                          # run rules' inline test blocks
+lint parse --lang go --pattern 'fmt.Println($$$)'   # see how a pattern compiles
+lint parse main.go                 # dump a file's syntax tree (find node kinds)
+lint new my-rule --lang go         # scaffold a new rule
+lint langs                         # list supported languages
 ```
 
 ### How rules are discovered
 
-Running `lintel` (or `lintel check`) with no `--rules` flag discovers every
-`.lintel/` directory **from the current directory up through its ancestors and
+Running `lint` (or `lint check`) with no `--rules` flag discovers every
+`.lint/` directory **from the current directory up through its ancestors and
 down through its descendants**, and loads every `*.lint` file in them. Ancestor
-rules apply to the whole tree; a nested `.lintel/` applies only to its own
+rules apply to the whole tree; a nested `.lint/` applies only to its own
 subtree. This lets a monorepo keep global rules at the root and package-specific
 rules deeper down.
 
@@ -110,11 +110,11 @@ directly inside it — discovery is not recursive into that directory).
 | Structural context | `inside` / `has` (and `not inside` / `not has`) filter by surrounding code |
 | `any` / `all` / `not` | Combine matchers with boolean logic |
 | Raw queries | Drop to a Tree-sitter s-expression `query "..."` when patterns aren't enough |
-| Autofix | `fix "..."` templates rewritten by `lintel check --fix` |
-| Inline tests | `test { match ... no_match ... }` run by `lintel test` |
+| Autofix | `fix "..."` templates rewritten by `lint check --fix` |
+| Inline tests | `test { match ... no_match ... }` run by `lint test` |
 | Severities | `error`, `warning`, `info`; `--quiet`, `--error-on-warning` control exit code |
 | JSON output | `--json` for editor/CI integration |
-| Parallel + scoped | `-j` workers; `.lintel/` discovery scopes rules to subtrees |
+| Parallel + scoped | `-j` workers; `.lint/` discovery scopes rules to subtrees |
 | Polyglot rules | Omit `in` and a rule compiles for every language whose grammar accepts it |
 
 ## Supported languages
@@ -131,12 +131,12 @@ directly inside it — discovery is not recursive into that directory).
 | TypeScript | `typescript` (`ts`) | `.ts .mts .cts` |
 | TSX / JS | `tsx` (`javascript`, `js`, `jsx`) | `.tsx .js .jsx .mjs .cjs` |
 
-(Run `lintel langs` to print this list.)
+(Run `lint langs` to print this list.)
 
 ## Example rules
 
 These are real, tested rules from [`examples/`](examples/). Every rule there
-carries an inline `test` block; run `lintel test --rules examples/go` (etc.) to
+carries an inline `test` block; run `lint test --rules examples/go` (etc.) to
 see them pass.
 
 **Go — flag `panic` in library code** ([`examples/go/panic-in-library.lint`](examples/go/panic-in-library.lint)):
@@ -208,7 +208,7 @@ There are ready-to-read examples for every language under
 - [docs/dsl.md](docs/dsl.md) — the complete `.lint` DSL reference: every clause
   and every `where` operator, with worked examples.
 - [docs/writing-rules.md](docs/writing-rules.md) — a practical guide to authoring
-  rules: discovering node kinds with `lintel parse`, the metavariable model,
+  rules: discovering node kinds with `lint parse`, the metavariable model,
   per-language patterns, fixes, tests, and known limitations.
 
 ## License

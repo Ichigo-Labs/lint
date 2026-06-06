@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ichigo-labs/lintel/internal/dsl"
-	"github.com/ichigo-labs/lintel/internal/engine"
-	"github.com/ichigo-labs/lintel/internal/lang"
+	"github.com/ichigo-labs/lint/internal/dsl"
+	"github.com/ichigo-labs/lint/internal/engine"
+	"github.com/ichigo-labs/lint/internal/lang"
 )
 
 // LoadError records a rule file that failed to parse or compile.
@@ -49,10 +49,10 @@ func (rs *RuleSet) Len() int { return len(rs.rules) }
 var ignoredDirs = map[string]bool{
 	".git": true, "node_modules": true, "vendor": true, "dist": true,
 	"build": true, "out": true, "target": true, "bin": true, "obj": true,
-	".idea": true, ".vscode": true, "__pycache__": true, ".lintel": true,
+	".idea": true, ".vscode": true, "__pycache__": true, ".lint": true,
 }
 
-// Load discovers `.lintel/` directories from root upward (ancestors) and
+// Load discovers `.lint/` directories from root upward (ancestors) and
 // downward (descendants), compiling every `*.lint` rule it finds. If
 // rulesDirOverride is set, only that directory is loaded and applied to the
 // whole tree.
@@ -65,12 +65,12 @@ func Load(root, rulesDirOverride string) (*RuleSet, []LoadError, error) {
 	var lerrs []LoadError
 	seen := map[string]bool{}
 
-	loadDir := func(lintelDir, scope string) {
-		if seen[lintelDir] {
+	loadDir := func(lintDir, scope string) {
+		if seen[lintDir] {
 			return
 		}
-		seen[lintelDir] = true
-		entries, err := os.ReadDir(lintelDir)
+		seen[lintDir] = true
+		entries, err := os.ReadDir(lintDir)
 		if err != nil {
 			return
 		}
@@ -78,7 +78,7 @@ func Load(root, rulesDirOverride string) (*RuleSet, []LoadError, error) {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".lint") {
 				continue
 			}
-			path := filepath.Join(lintelDir, e.Name())
+			path := filepath.Join(lintDir, e.Name())
 			rules, err := dsl.ParseFile(path)
 			if err != nil {
 				lerrs = append(lerrs, LoadError{Path: path, Err: err})
@@ -106,9 +106,9 @@ func Load(root, rulesDirOverride string) (*RuleSet, []LoadError, error) {
 		return rs, lerrs, nil
 	}
 
-	// Ancestors: every <ancestor>/.lintel applies to that ancestor's subtree.
+	// Ancestors: every <ancestor>/.lint applies to that ancestor's subtree.
 	for dir := absRoot; ; {
-		ld := filepath.Join(dir, ".lintel")
+		ld := filepath.Join(dir, ".lint")
 		if fi, err := os.Stat(ld); err == nil && fi.IsDir() {
 			loadDir(ld, dir)
 		}
@@ -119,14 +119,14 @@ func Load(root, rulesDirOverride string) (*RuleSet, []LoadError, error) {
 		dir = parent
 	}
 
-	// Descendants: nested .lintel dirs apply to their own subtree.
+	// Descendants: nested .lint dirs apply to their own subtree.
 	filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
 			if path != absRoot && ignoredDirs[d.Name()] {
-				if d.Name() == ".lintel" {
+				if d.Name() == ".lint" {
 					loadDir(path, filepath.Dir(path))
 				}
 				return filepath.SkipDir
