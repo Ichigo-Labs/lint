@@ -981,3 +981,38 @@ func TestBranchScopedWhereParses(t *testing.T) {
 		t.Fatalf("expected 1 branch-scoped where, got %d", len(first.Where))
 	}
 }
+
+func TestWhereBooleanGroupParses(t *testing.T) {
+	r := parseOne(t, `rule r {
+  in go
+  pattern { f($X) }
+  where any {
+    $X in [a, b]
+    all { $X matches "^z" $X not matches "q" }
+  }
+}`)
+	if len(r.Where) != 1 {
+		t.Fatalf("expected 1 top-level where, got %d", len(r.Where))
+	}
+	grp := r.Where[0]
+	if grp.Kind != dsl.ConAny {
+		t.Fatalf("expected ConAny, got %v", grp.Kind)
+	}
+	if len(grp.Sub) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(grp.Sub))
+	}
+	if grp.Sub[1].Kind != dsl.ConAll || len(grp.Sub[1].Sub) != 2 {
+		t.Fatalf("expected nested ConAll with 2 children, got %+v", grp.Sub[1])
+	}
+}
+
+func TestWhereEmptyGroupErrors(t *testing.T) {
+	_, err := dsl.Parse("r.lint", `rule r {
+  in go
+  pattern { f($X) }
+  where any { }
+}`)
+	if err == nil {
+		t.Fatalf("expected error for empty where any { }")
+	}
+}

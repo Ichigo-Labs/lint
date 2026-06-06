@@ -106,7 +106,8 @@ type compiledConstraint struct {
 	set     map[string]bool
 	re      *regexp.Regexp
 	matcher *compiledMatcher
-	num     float64 // parsed threshold for numeric/count constraints
+	num     float64              // parsed threshold for numeric/count constraints
+	sub     []compiledConstraint // child constraints (for Any/All groups)
 }
 
 type compiledRelation struct {
@@ -276,6 +277,14 @@ func compileConstraint(l *lang.Language, c dsl.Constraint) (compiledConstraint, 
 			return cc, err
 		}
 		cc.matcher = m
+	case dsl.ConAny, dsl.ConAll:
+		for _, sc := range c.Sub {
+			sub, err := compileConstraint(l, sc)
+			if err != nil {
+				return cc, err
+			}
+			cc.sub = append(cc.sub, sub)
+		}
 	case dsl.ConNumGt, dsl.ConNumGe, dsl.ConNumLt, dsl.ConNumLe,
 		dsl.ConCountGt, dsl.ConCountGe, dsl.ConCountLt, dsl.ConCountLe,
 		dsl.ConCountEq, dsl.ConCountNe:
@@ -589,6 +598,24 @@ func matchDescendant(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bi
 }
 
 func (c compiledConstraint) eval(ctx *matchCtx, b Bindings) bool {
+	// Boolean groups combine child constraints and have no metavariable of their
+	// own, so handle them before the per-variable binding lookup below.
+	switch c.kind {
+	case dsl.ConAny:
+		for _, s := range c.sub {
+			if s.eval(ctx, b) {
+				return true
+			}
+		}
+		return false
+	case dsl.ConAll:
+		for _, s := range c.sub {
+			if !s.eval(ctx, b) {
+				return false
+			}
+		}
+		return true
+	}
 	bv, ok := b[c.varName]
 	if !ok {
 		return false // constraint references an unbound metavariable

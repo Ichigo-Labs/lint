@@ -15,7 +15,7 @@ This document is the complete reference. For a task-oriented walkthrough, see
 - [How matching works](#how-matching-works)
 - [Matcher clauses](#matcher-clauses) — `pattern`, `query`, `any`, `all`, `not`
 - [Relation clauses](#relation-clauses) — `inside`, `has`, `precedes`, `follows`, `directly`, and negations
-- [`where` constraints](#where-constraints) — regex, kind, membership, numeric, `count`, sub-pattern
+- [`where` constraints](#where-constraints) — regex, kind, membership, numeric, `count`, sub-pattern, boolean `any`/`all` groups
 - [Path scoping](#path-scoping) — `paths` / `exclude` globs
 - [`fix`](#fix)
 - [`test`](#test)
@@ -534,10 +534,38 @@ to never fire on that candidate, so only constrain names you actually capture.
 | `$X count > n` (`>= < <= == !=`) | the number of nodes a variadic captured satisfies the bound |
 | `$X is pattern { ... }` | the captured subtree (or a descendant) matches the sub-pattern |
 | `$X is not pattern { ... }` | it does not match the sub-pattern |
+| `any { <constraint>... }` | **at least one** child constraint holds (boolean OR) |
+| `all { <constraint>... }` | **every** child constraint holds (boolean AND) |
 
 List items may be bare identifiers, strings, or numbers. The right side of `is` /
 `is not` may be a `pattern { ... }` **or** a `query "..."`. Number literals may be
 integers or decimals (`3`, `60000`, `2.5`).
+
+### Boolean groups (`any` / `all`)
+
+Top-level `where` clauses are ANDed together. To express **OR**, or to mix OR and
+AND, wrap constraints in a `where any { ... }` or `where all { ... }` group.
+Groups may reference different metavariables and nest arbitrarily:
+
+```
+rule handler-prop-naming {
+  in tsx
+  query "(_ name: (identifier) @comp (jsx_attribute (property_identifier) @name (jsx_expression [(arrow_function) (function_expression) (identifier)] @value)) @match)"
+  where $comp matches "^[A-Z]"
+  where $name not matches "^on([A-Z]|$)"
+  where any {
+    $value kind arrow_function          # inline functions are always handlers
+    $value kind function_expression
+    all {                                # identifiers only when the name is a verb
+      $value kind identifier
+      $name matches "^(open|close|toggle|select|set)([A-Z]|$)"
+    }
+  }
+}
+```
+
+A group needs at least one child. As with any `where`, a child that references an
+unbound metavariable simply evaluates to false (it never throws).
 
 ### Numeric comparisons and `count`
 

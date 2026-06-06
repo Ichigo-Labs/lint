@@ -545,6 +545,15 @@ func countConstraintKind(k tokKind) (ConstraintKind, bool) {
 }
 
 func (p *parser) parseConstraint() (Constraint, error) {
+	t, err := p.peek()
+	if err != nil {
+		return Constraint{}, err
+	}
+	// Boolean grouping: `where any { ... }` / `where all { ... }`.
+	if t.kind == tIdent && (t.val == "any" || t.val == "all") {
+		p.next()
+		return p.parseConstraintGroup(t)
+	}
 	mv, err := p.expect(tMeta)
 	if err != nil {
 		return Constraint{}, err
@@ -673,6 +682,42 @@ func (p *parser) parseConstraint() (Constraint, error) {
 		return c, nil
 	}
 	return c, p.lex.errf(op.pos, "expected a constraint operator after $%s, got %s", c.Var, op)
+}
+
+// parseConstraintGroup reads the `{ ... }` body of a `where any`/`where all`
+// boolean group: a sequence of constraints (each of which may itself be a
+// group), combined with OR (any) or AND (all).
+func (p *parser) parseConstraintGroup(kw token) (Constraint, error) {
+	if _, err := p.expect(tLBrace); err != nil {
+		return Constraint{}, err
+	}
+	var subs []Constraint
+	for {
+		t, err := p.peek()
+		if err != nil {
+			return Constraint{}, err
+		}
+		if t.kind == tRBrace {
+			p.next()
+			break
+		}
+		if t.kind == tEOF {
+			return Constraint{}, p.lex.errf(kw.pos, "unterminated where %s { ... }", kw.val)
+		}
+		c, err := p.parseConstraint()
+		if err != nil {
+			return Constraint{}, err
+		}
+		subs = append(subs, c)
+	}
+	if len(subs) == 0 {
+		return Constraint{}, p.lex.errf(kw.pos, "where %s { } needs at least one constraint", kw.val)
+	}
+	kind := ConAny
+	if kw.val == "all" {
+		kind = ConAll
+	}
+	return Constraint{Kind: kind, Sub: subs, Pos: kw.pos}, nil
 }
 
 // --- tests ---------------------------------------------------------------

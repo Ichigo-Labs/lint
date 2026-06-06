@@ -154,6 +154,8 @@ const (
 	ConCountLe                          // $X count <= n
 	ConCountEq                          // $X count == n
 	ConCountNe                          // $X count != n
+	ConAny                              // any { <constraint>... } — true if any child holds
+	ConAll                              // all { <constraint>... } — true if every child holds
 )
 
 // Constraint is one `where` predicate over a captured metavariable.
@@ -162,10 +164,11 @@ type Constraint struct {
 	Var  string // metavariable name without the leading '$'
 
 	// Operand, by kind:
-	Text    string   // regex source, node kind, comparison literal
-	Other   string   // second metavariable name (for Eq/NeqVar)
-	List    []string // membership set (for In/NotIn)
-	Matcher *Matcher // sub-matcher (for Pattern/NotPattern)
+	Text    string       // regex source, node kind, comparison literal
+	Other   string       // second metavariable name (for Eq/NeqVar)
+	List    []string     // membership set (for In/NotIn)
+	Matcher *Matcher     // sub-matcher (for Pattern/NotPattern)
+	Sub     []Constraint // child constraints (for Any/All groups)
 
 	Pos Position
 }

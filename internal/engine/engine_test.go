@@ -425,3 +425,79 @@ f(zebra)
 		t.Fatalf("expected f(apple), got %v", got)
 	}
 }
+
+func TestWhereAnyGroup(t *testing.T) {
+	// `where any { ... }` is an OR over its child constraints: flag a call whose
+	// name is in the set OR whose single arg is a number above a threshold.
+	rule := `rule r { in go
+  pattern { $NAME($X) }
+  where any {
+    $NAME in [warn, fatal]
+    $X > 1000
+  }
+}`
+	fs := run(t, "go", rule, `package main
+
+func run() {
+warn(1)
+info(1)
+debug(5000)
+trace(3)
+}`)
+	wantN(t, fs, 2) // warn(1) via name; debug(5000) via numeric bound
+	got := snippets(fs)
+	for _, s := range got {
+		if s == "info(1)" || s == "trace(3)" {
+			t.Fatalf("unexpected match %q in %v", s, got)
+		}
+	}
+}
+
+func TestWhereNestedAnyAll(t *testing.T) {
+	// Mirrors the React handler-prop rule shape: flag when the value is an inline
+	// function OR (it's an identifier AND the name looks like a verb).
+	rule := `rule r { in tsx
+  query "(_ name: (identifier) @comp (jsx_attribute (property_identifier) @name (jsx_expression [(arrow_function) (function_expression) (identifier)] @value)) @match)"
+  where $comp matches "^[A-Z]"
+  where $name not matches "^on([A-Z]|$)"
+  where any {
+    $value kind arrow_function
+    $value kind function_expression
+    all {
+      $value kind identifier
+      $name matches "^(open|toggle|select)([A-Z]|$)"
+    }
+  }
+}`
+	code := `
+const a = <Modal openModal={() => f()} />;
+const b = <Panel openModal={() => f()}>kid</Panel>;
+const c = <Modal onClose={() => f()} />;
+const d = <Modal openGroupPickerModal={openGroupPickerModal} />;
+const e = <div openModal={() => f()} />;
+const g = <Modal selectedOption={selectedOption} />;
+const h = <Modal title={title} />;
+`
+	fs := run(t, "tsx", rule, code)
+	// a (arrow), b (arrow), d (identifier verb). Not c (on*), e (lowercase comp),
+	// g (selectedOption: "select" not at a camel boundary), h (data prop).
+	wantN(t, fs, 3)
+}
+
+func TestWhereAllGroup(t *testing.T) {
+	rule := `rule r { in go
+  pattern { $NAME($X) }
+  where all {
+    $NAME matches "^w"
+    $X > 5
+  }
+}`
+	fs := run(t, "go", rule, `package main
+
+func run() {
+warn(10)
+warn(1)
+info(10)
+}`)
+	wantN(t, fs, 1) // only warn(10)
+}
