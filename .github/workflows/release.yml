@@ -1,0 +1,147 @@
+name: Release
+
+# Publishes a GitHub Release with prebuilt binaries when a v* tag is pushed:
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# Each platform is built on its native runner because Tree-sitter requires CGO
+# (cross-compiling CGO is fragile). A manual run (workflow_dispatch) builds and
+# uploads all artifacts for inspection but does not publish a release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string to stamp into the binary (e.g. v0.2.0). Build only; no release is published."
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "1"
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    goos: linux,   goarch: amd64, ext: "",     archive: tar }
+          - { os: ubuntu-24.04-arm, goos: linux,   goarch: arm64, ext: "",     archive: tar }
+          - { os: macos-15-intel,   goos: darwin,  goarch: amd64, ext: "",     archive: tar }
+          - { os: macos-14,         goos: darwin,  goarch: arm64, ext: "",     archive: tar }
+          - { os: windows-latest,   goos: windows, goarch: amd64, ext: ".exe", archive: zip }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need tags for `git describe`
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify C compiler (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: gcc --version
+
+      # Gate the release on the test suite so a tag can never ship a binary
+      # that fails tests on its own platform (the release job needs: build).
+      - name: Test
+        shell: bash
+        run: go test ./...
+
+      - name: Determine version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            v="${{ github.ref_name }}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="$(git describe --tags --always 2>/dev/null || echo dev)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building version: $v"
+
+      - name: Build
+        shell: bash
+        run: |
+          mkdir -p dist/pkg
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/ichigo-labs/lint/internal/cli.version=${{ steps.ver.outputs.version }}" \
+            -o "dist/pkg/lint${{ matrix.ext }}" ./cmd/lint
+          cp LICENSE README.md dist/pkg/
+
+      # Run the freshly built native binary and assert the release version was
+      # stamped in (catches a broken -X ldflags path, which Go ignores silently).
+      - name: Smoke-test binary
+        shell: bash
+        run: |
+          out="$(dist/pkg/lint${{ matrix.ext }} --version)"
+          echo "$out"
+          case "$out" in
+            *"${{ steps.ver.outputs.version }}"*) ;;
+            *) echo "version stamp mismatch (wanted ${{ steps.ver.outputs.version }})"; exit 1 ;;
+          esac
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist/out
+          asset="lint_${{ matrix.goos }}_${{ matrix.goarch }}"
+          cd dist/pkg
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a -tzip "../out/${asset}.zip" "lint${{ matrix.ext }}" LICENSE README.md >/dev/null
+          else
+            tar -czf "../out/${asset}.tar.gz" "lint${{ matrix.ext }}" LICENSE README.md
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/out/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write # create the release and upload assets
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          shopt -s nullglob
+          files=(lint_*.tar.gz lint_*.zip)
+          [ ${#files[@]} -gt 0 ] || { echo "no release artifacts found"; exit 1; }
+          sha256sum "${files[@]}" > checksums.txt
+          echo "--- checksums.txt ---"
+          cat checksums.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/lint_*.tar.gz
+            dist/lint_*.zip
+            dist/checksums.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true

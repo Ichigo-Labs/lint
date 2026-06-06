@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Tree-sitter grammars are compiled in, so every build needs CGO + a C compiler.
+env:
+  CGO_ENABLED: "1"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & enforce lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting (gofmt)
+        run: |
+          out="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$out" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$out"
+            echo "Run: gofmt -w ./cmd ./internal"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Unit tests (race detector)
+        run: go test -race ./...
+
+      - name: Build
+        run: go build -ldflags "-X github.com/ichigo-labs/lint/internal/cli.version=ci-${GITHUB_SHA::12}" -o lint ./cmd/lint
+
+      - name: Rule self-tests (lint test)
+        run: ./lint test
+
+      # Enforce the linter on its own source. Exits non-zero on any
+      # error-severity finding or malformed rule file (warnings are reported
+      # but do not fail the build).
+      - name: Enforce lint (lint check)
+        run: ./lint check .
+
+  cross-build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    goos: linux,   goarch: amd64 }
+          - { os: ubuntu-24.04-arm, goos: linux,   goarch: arm64 }
+          - { os: macos-15-intel,   goos: darwin,  goarch: amd64 }
+          - { os: macos-14,         goos: darwin,  goarch: arm64 }
+          - { os: windows-latest,   goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Tree-sitter's C needs a compiler. Linux/macOS have gcc/clang natively;
+      # on Windows, fail fast with a clear message if the runner's gcc is gone.
+      - name: Verify C compiler (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: gcc --version
+
+      # Confirms the CGO build and Tree-sitter grammars compile and load on
+      # each target platform (the same set the release workflow ships).
+      - name: Build
+        run: go build ./cmd/lint
+
+      - name: Unit tests
+        run: go test ./...

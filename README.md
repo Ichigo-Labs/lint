@@ -1,5 +1,7 @@
 # lint
 
+[![CI](https://github.com/Ichigo-Labs/lint/actions/workflows/ci.yml/badge.svg)](https://github.com/Ichigo-Labs/lint/actions/workflows/ci.yml)
+
 **lint** finds bugs and bad patterns in your code by matching its *syntax
 tree*, not its text. You write small rules in a focused DSL, and lint runs
 them across C, C++, C#, Go, Java, Kotlin, Python, Rust, Swift, and
@@ -38,13 +40,42 @@ lint trades depth for reach: you get *one* tiny rule language and a fast feedbac
 loop (`lint test`) for project-specific rules across every language in your
 repo, without writing a plugin in each ecosystem.
 
-## Install / build
+## Install
 
-lint embeds Tree-sitter grammars, so building it needs **Go and a C compiler
-with CGO enabled**.
+### Quick install (prebuilt binary)
+
+The installer downloads a prebuilt binary for your platform, verifies its
+checksum, and puts it on your `PATH` — **no Go or C compiler required**:
 
 ```bash
-git clone https://github.com/ichigo-labs/lint
+curl -fsSL https://raw.githubusercontent.com/Ichigo-Labs/lint/master/install.sh | bash
+```
+
+It installs into `/usr/local/bin` if that's writable, otherwise `~/.local/bin`,
+and supports **Linux** and **macOS** (amd64 and arm64). **Windows** (amd64)
+binaries are published too — grab the `.zip` from the
+[releases page](https://github.com/Ichigo-Labs/lint/releases) (see below).
+
+```bash
+# install a specific version
+curl -fsSL https://raw.githubusercontent.com/Ichigo-Labs/lint/master/install.sh | LINT_VERSION=v0.2.0 bash
+
+# install into a directory of your choosing
+curl -fsSL https://raw.githubusercontent.com/Ichigo-Labs/lint/master/install.sh | LINT_INSTALL_DIR="$HOME/bin" bash
+```
+
+Prefer to do it by hand? Grab a tarball (or `.zip` on Windows) from the
+[releases page](https://github.com/Ichigo-Labs/lint/releases), verify it
+against `checksums.txt`, and drop the `lint` binary (`lint.exe` on Windows) on
+your `PATH`.
+
+### Build from source
+
+lint embeds Tree-sitter grammars, so building it needs **Go and a C compiler
+with CGO enabled**:
+
+```bash
+git clone https://github.com/Ichigo-Labs/lint
 cd lint
 CGO_ENABLED=1 go build -o lint ./cmd/lint
 ```
@@ -98,6 +129,63 @@ rules deeper down.
 
 Pass `--rules <dir>` to load rules from exactly one directory instead (the files
 directly inside it — discovery is not recursive into that directory).
+
+## Git pre-commit hook
+
+Run lint automatically before every commit so violations never land in history.
+
+By default `lint check` exits non-zero only on **error**-severity findings, so a
+hook will block a commit on errors but let warnings through. Add
+`--error-on-warning` if you want warnings to block commits too.
+
+### Option A — a plain git hook
+
+Create `.githooks/pre-commit` in your repo and make it executable
+(`chmod +x .githooks/pre-commit`):
+
+```bash
+#!/usr/bin/env bash
+# Lint the files staged for this commit and block on findings.
+set -euo pipefail
+
+# Staged files (added/copied/modified). lint silently skips paths whose
+# language it doesn't recognize, so passing all of them is safe.
+files="$(git diff --cached --name-only --diff-filter=ACM)"
+[ -z "$files" ] && exit 0
+
+# Drop --error-on-warning to block only on error-severity findings.
+echo "$files" | xargs lint check --error-on-warning
+```
+
+Then point git at that tracked directory so the hook is shared with the whole
+team (unlike `.git/hooks/`, which isn't committed):
+
+```bash
+git config core.hooksPath .githooks
+```
+
+### Option B — the [pre-commit](https://pre-commit.com) framework
+
+Add a local hook to `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: local
+    hooks:
+      - id: lint
+        name: lint
+        entry: lint check --error-on-warning
+        language: system
+        pass_filenames: true
+        types: [text]
+```
+
+Then install it with `pre-commit install`. pre-commit passes the staged files to
+`lint check`, which checks only those paths against your discovered `.lint/`
+rules.
+
+> Either way, `lint` must be on the hook's `PATH` — install it with the
+> [installer above](#install) (or `make install`).
 
 ## Feature overview
 
