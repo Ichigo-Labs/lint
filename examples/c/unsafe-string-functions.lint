@@ -1,0 +1,16 @@
+rule unsafe-unbounded-string-copy {
+  message  "strcpy/strcat write until a NUL with no destination bound; prefer a size-bounded copy (snprintf, strlcpy)"
+  severity warning
+  note     "The destination capacity is invisible to these calls, so a long source silently overflows it."
+  in       c, cpp
+  any {
+    pattern { strcpy($DST, $SRC) }
+    pattern { strcat($DST, $SRC) }
+  }
+  test {
+    match    "void f(const char *s){ char b[8]; strcpy(b, s); }"
+    match    "void f(const char *s){ char b[8]; strcat(b, s); }"
+    no_match "void f(const char *s){ char b[8]; snprintf(b, sizeof(b), \"%s\", s); }"
+    no_match "void f(const char *s){ char b[8]; strncpy(b, s, sizeof(b) - 1); }"
+  }
+}

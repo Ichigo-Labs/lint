@@ -1,0 +1,15 @@
+rule no-non-null-assertion {
+  message  "Avoid the non-null assertion `!`; narrow the type or handle null explicitly"
+  severity warning
+  in       typescript
+  note     "The `!` operator silences the compiler but can crash at runtime if the value really is null/undefined."
+
+  pattern { $X! }
+
+  test {
+    match    "const name = user!.name;"
+    match    "doThing(config!);"
+    no_match "const name = user?.name;"
+    no_match "const ok = a !== b;"
+  }
+}

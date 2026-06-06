@@ -1,0 +1,15 @@
+rule disallowed_panic_macros {
+  message  "remove $M!(...); it aborts the program instead of returning an error"
+  severity error
+  note     "panic!, unimplemented!, todo! and unreachable! all abort at runtime"
+  in       rust
+  pattern  { $M!($$$) }
+  where    $M in [panic, unimplemented, todo, unreachable]
+  test {
+    match    "fn f() { todo!() }"
+    match    "fn f() -> i32 { panic!(\"boom\") }"
+    match    "fn f() { unreachable!(\"bad state\") }"
+    no_match "fn f() { println!(\"ok\") }"
+    no_match "fn f() { assert!(true) }"
+  }
+}

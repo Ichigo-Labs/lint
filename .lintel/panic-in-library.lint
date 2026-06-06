@@ -1,0 +1,31 @@
+rule panic-in-library {
+  message  "avoid panic; return an error instead"
+  severity warning
+  note     "Panicking crashes the caller's program. Reusable packages should return errors and let callers decide what to do. Reserve panic for truly unrecoverable, programmer-error conditions."
+  in       go
+
+  pattern { panic($$$) }
+
+  test {
+    match    """
+package store
+func Get(k string) string {
+	v, ok := m[k]
+	if !ok {
+		panic("missing key")
+	}
+	return v
+}
+"""
+    no_match """
+package store
+func Get(k string) (string, error) {
+	v, ok := m[k]
+	if !ok {
+		return "", errors.New("missing key")
+	}
+	return v, nil
+}
+"""
+  }
+}

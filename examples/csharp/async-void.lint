@@ -1,0 +1,15 @@
+rule async-void {
+  message  "avoid 'async void'; return 'async Task' so callers can await and observe exceptions"
+  severity warning
+  in       csharp
+  note     "Exceptions thrown from an async void method cannot be caught by the caller and will crash the process. The only legitimate use is a top-level event handler."
+  query    "(method_declaration (modifier) @mod returns: (predefined_type) @ret name: (identifier)) @match"
+  where    $mod == "async"
+  where    $ret == "void"
+  test {
+    match    "class C { async void Handler() { } }"
+    match    "class C { public async void Run() { await Work(); } }"
+    no_match "class C { async Task Handler() { await Work(); } }"
+    no_match "class C { void Handler() { } }"
+  }
+}

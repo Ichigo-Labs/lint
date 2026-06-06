@@ -1,0 +1,15 @@
+rule endl-in-loop {
+  message  "std::endl inside a loop flushes the stream every iteration; write '\\n' and flush once after the loop"
+  severity warning
+  note     "std::endl == '\\n' plus a flush. Flushing each iteration can make output dramatically slower."
+  in       cpp
+  pattern  { std::endl }
+  inside   pattern { for ($T $I = $V; $B; $C) { $$$; } }
+
+  test {
+    match    "void f(int n) { for (int i = 0; i < n; i++) { std::cout << i << std::endl; } }"
+    match    "void f(size_t n) { for (size_t i = 0; i < n; ++i) { std::cout << std::endl; } }"
+    no_match "void f() { std::cout << std::endl; }"
+    no_match "void f(int n) { for (int i = 0; i < n; i++) { std::cout << i << '\\n'; } }"
+  }
+}

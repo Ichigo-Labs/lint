@@ -1,0 +1,27 @@
+rule context-todo {
+  message  "context.TODO() left in code; pass a real context.Context"
+  severity warning
+  note     "context.TODO() is a placeholder meaning 'wiring not finished'. Thread a real context from the caller, or use context.Background() at a genuine top-level entry point."
+  in       go
+
+  pattern { context.TODO() }
+
+  test {
+    match    """
+package p
+func run() {
+	res, err := client.Do(context.TODO(), req)
+	_ = res
+	_ = err
+}
+"""
+    no_match """
+package p
+func run(ctx context.Context) {
+	res, err := client.Do(ctx, req)
+	_ = res
+	_ = err
+}
+"""
+  }
+}

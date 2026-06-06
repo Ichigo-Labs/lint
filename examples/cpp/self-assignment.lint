@@ -1,0 +1,14 @@
+rule self-assignment {
+  message  "self-assignment '$X = $X' has no effect; likely a typo"
+  severity warning
+  note     "If you meant to assign a different value, fix the right-hand side; otherwise delete the statement."
+  in       cpp
+  pattern  { $X = $X }
+
+  test {
+    match    "void f(int a) { a = a; }"
+    match    "struct P { int x; void f() { this->x = this->x; } };"
+    no_match "void f(int a, int b) { a = b; }"
+    no_match "void f(int a) { a += a; }"
+  }
+}

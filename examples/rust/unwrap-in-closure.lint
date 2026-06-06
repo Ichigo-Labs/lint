@@ -1,0 +1,12 @@
+rule unwrap_in_closure {
+  message  "avoid .unwrap() inside a closure; an iterator/callback will panic on the first error"
+  severity warning
+  note     "prefer returning Result and using collect::<Result<_,_>>() or filter_map"
+  in       rust
+  pattern  { $X.unwrap() }
+  inside pattern { |$$$| $BODY }
+  test {
+    match    "fn f() { let n = items.iter().map(|x| x.parse::<i32>().unwrap()).count(); }"
+    no_match "fn f() { let v = config.unwrap(); }"
+  }
+}

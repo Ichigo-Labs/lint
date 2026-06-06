@@ -1,0 +1,30 @@
+rule errors-new-sprintf {
+  message  "use fmt.Errorf instead of errors.New(fmt.Sprintf(...))"
+  severity warning
+  note     "fmt.Errorf does the formatting in one call and lets you wrap causes with %w."
+  in       go
+
+  pattern { errors.New(fmt.Sprintf($$$ARGS)) }
+  fix     "fmt.Errorf($$$ARGS)"
+
+  test {
+    match    """
+package p
+func f(name string) error {
+	return errors.New(fmt.Sprintf("bad name: %s", name))
+}
+"""
+    no_match """
+package p
+func f(name string) error {
+	return fmt.Errorf("bad name: %s", name)
+}
+"""
+    no_match """
+package p
+func f() error {
+	return errors.New("static message")
+}
+"""
+  }
+}

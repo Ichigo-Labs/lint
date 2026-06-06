@@ -1,0 +1,15 @@
+rule no_debug_print {
+  message  "remove debug macro $M!(...) before committing; use the log crate instead"
+  severity warning
+  note     "println!/eprintln!/dbg! left in code is usually leftover debugging output"
+  in       rust
+  pattern  { $M!($$$) }
+  where    $M in [println, print, eprintln, eprint, dbg]
+  test {
+    match    "fn f() { println!(\"x = {}\", x); }"
+    match    "fn f() { dbg!(x); }"
+    match    "fn f() { eprintln!(\"oops\"); }"
+    no_match "fn f() { log::info!(\"x = {}\", x); }"
+    no_match "fn f() { write!(buf, \"{}\", x); }"
+  }
+}

@@ -1,0 +1,23 @@
+rule self-comparison {
+  message  "comparing $X with itself is always true; this is likely a typo for another variable"
+  severity warning
+  note     "Uses a back-reference: both operands of '==' must be the same text. A tautological self-comparison usually means the wrong name was typed on one side."
+  in       c, cpp
+  pattern  { $X == $X }
+  test {
+    match    "int f(int a){ if (a == a) return 1; return 0; }"
+    no_match "int f(int a, int b){ if (a == b) return 1; return 0; }"
+  }
+}
+
+rule self-assignment {
+  message  "self-assignment of $X has no effect"
+  severity info
+  note     "Uses a back-reference: the left and right side of '=' are identical text, so the statement is a no-op (often a leftover typo)."
+  in       c, cpp
+  pattern  { $X = $X }
+  test {
+    match    "int f(int a){ a = a; return a; }"
+    no_match "int f(int a, int b){ a = b; return a; }"
+  }
+}

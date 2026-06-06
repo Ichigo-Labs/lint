@@ -1,0 +1,12 @@
+rule sprintf-unbounded {
+  message  "sprintf() has no output bound and can overflow $BUF; use snprintf() with the buffer size"
+  severity warning
+  note     "The autofix inserts sizeof($BUF), which is correct only when $BUF is a stack/array buffer rather than a decayed pointer."
+  in       c, cpp
+  pattern  { sprintf($BUF, $$$ARGS) }
+  fix      "snprintf($BUF, sizeof($BUF), $$$ARGS)"
+  test {
+    match    "void f(const char *s){ char b[16]; sprintf(b, \"%s\", s); }"
+    no_match "void f(const char *s){ char b[16]; snprintf(b, sizeof(b), \"%s\", s); }"
+  }
+}

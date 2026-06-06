@@ -1,0 +1,15 @@
+rule open-without-context-manager {
+  message  "open() result assigned to a variable — use a 'with' statement so the file is always closed"
+  severity warning
+  note     "A 'with open(...) as f:' block guarantees the file handle is closed even if an exception is raised."
+  in       python
+
+  pattern { $VAR = open($$$ARGS) }
+
+  test {
+    match    "f = open('data.txt')"
+    match    "handle = open(path, 'w')"
+    no_match "with open('data.txt') as f:\n    data = f.read()"
+    no_match "f = make_socket('data.txt')"
+  }
+}

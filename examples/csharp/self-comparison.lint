@@ -1,0 +1,14 @@
+rule self-comparison {
+  message  "both sides of this comparison are identical ($X == $X); this is always true and likely a typo"
+  severity warning
+  in       csharp
+  note     "Comparing an expression with itself is almost always a copy/paste mistake. Did you mean to compare against a different operand?"
+  pattern  { $X == $X }
+  where    $X not kind invocation_expression
+  test {
+    match    "class C { bool M(int a) { return a == a; } }"
+    match    "class C { bool M(Node n) { return n.Id == n.Id; } }"
+    no_match "class C { bool M(int a, int b) { return a == b; } }"
+    no_match "class C { bool M() { return Next() == Next(); } }"
+  }
+}

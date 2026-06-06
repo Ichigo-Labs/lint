@@ -1,0 +1,12 @@
+rule unsafe-gets {
+  message  "gets() cannot bound its input and always risks a buffer overflow; use fgets()"
+  severity error
+  note     "gets() was removed from C11 entirely. The autofix assumes $X is an array so that sizeof($X) is its capacity; verify before applying if $X is a pointer."
+  in       c, cpp
+  pattern  { gets($X) }
+  fix      "fgets($X, sizeof($X), stdin)"
+  test {
+    match    "int main(void){ char buf[64]; gets(buf); return 0; }"
+    no_match "int main(void){ char buf[64]; fgets(buf, sizeof(buf), stdin); return 0; }"
+  }
+}

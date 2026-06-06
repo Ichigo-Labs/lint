@@ -1,0 +1,14 @@
+rule no-nested-ternary {
+  message  "Avoid nested ternary expressions; use if/else or a helper for readability"
+  severity warning
+  in       typescript
+
+  pattern { $A ? $B : $C }
+  inside pattern { $D ? $E : $F }
+
+  test {
+    match    "const label = a ? 'x' : b ? 'y' : 'z';"
+    no_match "const label = a ? 'x' : 'y';"
+    no_match "const label = cond ? doA() : doB();"
+  }
+}

@@ -1,0 +1,58 @@
+rule err-nil-return {
+  message  "returning $ERR inside `if $ERR == nil` always returns a nil error; the check is likely inverted"
+  severity error
+  note     "This is the classic inverted error check. You almost certainly meant `if $ERR != nil { return $ERR }`."
+  in       go
+
+  # Back-reference across clauses: the value returned ($ERR) is the same one the
+  # enclosing `if` just asserted is nil, so the returned error is always nil.
+  pattern { return $ERR }
+  inside any {
+    pattern { if $ERR == nil { $$$ } }
+    pattern { if $_ := $_; $ERR == nil { $$$ } }
+  }
+  where  $ERR matches "(?i)err"
+
+  test {
+    match    """
+package p
+func load() error {
+	err := do()
+	if err == nil {
+		return err
+	}
+	return nil
+}
+"""
+    match    """
+package p
+func load() error {
+	if err := do(); err == nil {
+		log.Print("done")
+		return err
+	}
+	return nil
+}
+"""
+    no_match """
+package p
+func load() error {
+	err := do()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+"""
+    no_match """
+package p
+func load() error {
+	err := do()
+	if err == nil {
+		return nil
+	}
+	return err
+}
+"""
+  }
+}

@@ -1,0 +1,14 @@
+rule using-namespace-directive {
+  message  "avoid a 'using namespace' directive at file/namespace scope; it pollutes the enclosing namespace (never do this in a header)"
+  severity warning
+  note     "Prefer qualified names (std::vector) or narrow 'using std::vector;' declarations placed inside the smallest scope that needs them."
+  in       cpp
+  pattern  { using namespace $NS; }
+
+  test {
+    match    "using namespace std;"
+    match    "namespace foo { using namespace std; }"
+    no_match "using std::cout;"
+    no_match "void f() { std::cout << 1; }"
+  }
+}

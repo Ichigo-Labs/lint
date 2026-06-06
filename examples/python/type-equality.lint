@@ -1,0 +1,16 @@
+rule type-equality {
+  message  "Use isinstance($X, $T) instead of comparing type() with =="
+  severity warning
+  note     "type(x) == T fails for subclasses; isinstance respects inheritance. Only use exact type checks when subclasses must be rejected on purpose."
+  in       python
+
+  pattern { type($X) == $T }
+  where    $T kind identifier
+  fix      "isinstance($X, $T)"
+
+  test {
+    match    "if type(value) == int:\n    pass"
+    no_match "if isinstance(value, int):\n    pass"
+    no_match "if type(value) == type(other):\n    pass"
+  }
+}

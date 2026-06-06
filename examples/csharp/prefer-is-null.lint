@@ -1,0 +1,12 @@
+rule prefer-is-null {
+  message  "prefer '$X is null' over '== null' so a user-defined operator== cannot change the result"
+  severity info
+  in       csharp
+  note     "'is null' performs a reference/null check that ignores overloaded equality operators, which is usually what you want."
+  pattern  { $X == null }
+  fix      "$X is null"
+  test {
+    match    "class C { bool M(object o) { return o == null; } }"
+    no_match "class C { bool M(object o) { return o is null; } }"
+  }
+}

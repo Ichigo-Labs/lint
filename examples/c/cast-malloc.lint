@@ -1,0 +1,16 @@
+rule cast-malloc-result {
+  message  "casting the result of malloc/calloc/realloc is unnecessary in C and can hide a missing <stdlib.h> declaration"
+  severity info
+  note     "void* converts implicitly to any object pointer in C, so the cast is redundant. (This rule is C-only: in C++ the cast IS required, so it is not flagged there.)"
+  in       c
+  any {
+    pattern { ($T *)malloc($$$A) }
+    pattern { ($T *)calloc($$$A) }
+    pattern { ($T *)realloc($$$A) }
+  }
+  test {
+    match    "void f(void){ int *p = (int *)malloc(40); (void)p; }"
+    match    "void f(void){ int *p = (int *)calloc(10, 4); (void)p; }"
+    no_match "void f(void){ int *p = malloc(40); (void)p; }"
+  }
+}

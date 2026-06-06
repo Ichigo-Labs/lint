@@ -1,0 +1,16 @@
+rule no-console {
+  message  "Remove `console.$M` before committing; use a real logger instead"
+  severity warning
+  in       typescript
+  note     "console.log/debug/info/trace calls are usually leftover debugging output."
+
+  pattern { console.$M($$$) }
+  where    $M in [log, debug, info, trace]
+
+  test {
+    match    "console.log('hello', user)"
+    match    "console.debug(payload)"
+    no_match "console.error('a real error')"
+    no_match "logger.log('using a real logger')"
+  }
+}

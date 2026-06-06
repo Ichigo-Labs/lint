@@ -1,0 +1,13 @@
+rule nested_unsafe {
+  message  "redundant nested unsafe block; the inner unsafe is already implied"
+  severity warning
+  note     "an unsafe block inside another unsafe block adds no extra capability"
+  in       rust
+  pattern  { unsafe { $$$ } }
+  has pattern { unsafe { $$$ } }
+  test {
+    match    "fn f() { unsafe { unsafe { g() } } }"
+    no_match "fn f() { unsafe { g() } }"
+    no_match "fn f() { g() }"
+  }
+}

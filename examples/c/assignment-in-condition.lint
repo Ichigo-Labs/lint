@@ -1,0 +1,17 @@
+rule assignment-in-condition {
+  message  "assignment used as a condition; did you mean '=='? Wrap in an extra pair of parens to silence if intentional"
+  severity warning
+  note     "A single '=' inside an if/while condition is almost always a typo for '=='. The idiom 'while ((c = getchar()))' uses an extra pair of parentheses and is intentionally not flagged."
+  in       c, cpp
+  any {
+    pattern { if ($X = $Y) $_; }
+    pattern { while ($X = $Y) $_; }
+  }
+  test {
+    match    "int f(int a, int b){ if (a = b) return 1; return 0; }"
+    match    "int f(int a, int b){ if (a = b) { return 1; } return 0; }"
+    match    "int f(int a, int b){ while (a = b) { a--; } return 0; }"
+    no_match "int f(int a, int b){ if (a == b) return 1; return 0; }"
+    no_match "int f(int a, int b){ if ((a = b)) return 1; return 0; }"
+  }
+}

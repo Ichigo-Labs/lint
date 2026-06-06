@@ -1,0 +1,34 @@
+rule mutable-default-arg {
+  message  "Do not use a mutable default argument — the same object is shared across all calls"
+  severity warning
+  note     "Default values are evaluated once at definition time, so a list/dict default is reused and mutated across calls. Use None as the default and create the container inside the body."
+  in       python
+
+  # default_parameter whose value is a list or dict literal, e.g. (x=[], y={}).
+  # Written as a raw tree-sitter query because `x=[]` on its own parses as an
+  # assignment, not as a parameter default.
+  query "(default_parameter value: [(list) (dictionary)]) @match"
+
+  test {
+    match """
+def append(item, bucket=[]):
+    bucket.append(item)
+    return bucket
+"""
+    match """
+def configure(opts={}):
+    return opts
+"""
+    no_match """
+def append(item, bucket=None):
+    if bucket is None:
+        bucket = []
+    bucket.append(item)
+    return bucket
+"""
+    no_match """
+def add(a, b=0):
+    return a + b
+"""
+  }
+}

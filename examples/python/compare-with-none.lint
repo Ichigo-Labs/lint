@@ -1,0 +1,16 @@
+rule compare-with-none {
+  message  "Use 'is None' instead of '== None'"
+  severity warning
+  note     "None is a singleton, so identity comparison with 'is' is the correct, faster check and avoids surprises from a custom __eq__. (Use 'is not None' for the negated form.)"
+  in       python
+
+  pattern { $X == None }
+  fix      "$X is None"
+
+  test {
+    match    "if value == None:\n    pass"
+    no_match "if value is None:\n    pass"
+    no_match "if value != None:\n    pass"
+    no_match "if value == other:\n    pass"
+  }
+}

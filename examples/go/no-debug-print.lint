@@ -1,0 +1,28 @@
+rule no-debug-print {
+  message  "fmt.$M is debug output; use a logger or remove it before committing"
+  severity warning
+  note     "fmt.Print/Println/Printf write to stdout and usually leak into production output. Prefer a structured logger (log/slog) for diagnostics."
+  in       go
+
+  pattern  { fmt.$M($$$) }
+  where    $M in [Print, Println, Printf]
+
+  test {
+    match    """
+package p
+func handle() { fmt.Println("got here", x) }
+"""
+    match    """
+package p
+func handle() { fmt.Printf("value=%d\n", x) }
+"""
+    no_match """
+package p
+func render() string { return fmt.Sprintf("value=%d", x) }
+"""
+    no_match """
+package p
+func handle() { log.Println("ok") }
+"""
+  }
+}

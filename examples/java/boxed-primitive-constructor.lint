@@ -1,0 +1,15 @@
+rule boxed-primitive-constructor {
+  message  "use $T.valueOf(...) instead of new $T(...) to reuse cached boxed values"
+  severity warning
+  note     "The wrapper constructors are deprecated since Java 9; valueOf() caches small values and avoids a needless allocation."
+  in       java
+  pattern  { new $T($V) }
+  where    $T in [Integer, Long, Short, Byte, Character, Boolean, Double, Float]
+  fix      "$T.valueOf($V)"
+  test {
+    match    "class C { Integer m() { return new Integer(5); } }"
+    match    "class C { Boolean m() { return new Boolean(true); } }"
+    no_match "class C { Object m() { return new StringBuilder(); } }"
+    no_match "class C { Integer m() { return Integer.valueOf(5); } }"
+  }
+}

@@ -1,0 +1,16 @@
+rule self-comparison {
+  message  "Comparing '$X' to itself is always True — likely a typo or a copy/paste bug"
+  severity error
+  note     "A variable compared to itself with == is a constant expression. You probably meant to compare against a different operand."
+  in       python
+
+  # $X is reused, so the back-reference forces both operands to be the same text.
+  pattern { $X == $X }
+  where    $X kind identifier
+
+  test {
+    match    "if status == status:\n    pass"
+    no_match "if status == other:\n    pass"
+    no_match "if 1 == 1:\n    pass"
+  }
+}

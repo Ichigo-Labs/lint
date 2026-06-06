@@ -1,0 +1,14 @@
+rule no-eval {
+  message  "Never call eval(); it executes arbitrary code and is a security risk"
+  severity error
+  in       typescript
+
+  pattern { eval($$$) }
+
+  test {
+    match    "eval(userInput)"
+    match    "const r = eval('1 + 1');"
+    no_match "evaluate(expr)"
+    no_match "obj.eval(expr)"
+  }
+}

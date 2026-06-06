@@ -1,0 +1,11 @@
+rule nested-ternary {
+  message  "nested ternary (?:) expression is hard to read; extract to if/else or a switch expression"
+  severity warning
+  in       csharp
+  pattern  { $C ? $A : $B }
+  has pattern { $C2 ? $A2 : $B2 }
+  test {
+    match    "class C { int M(int a) { return a > 0 ? 1 : a < 0 ? -1 : 0; } }"
+    no_match "class C { int M(int a) { return a > 0 ? 1 : 0; } }"
+  }
+}

@@ -1,0 +1,12 @@
+rule bool_comparison {
+  message  "redundant comparison to true; use the expression directly"
+  severity warning
+  in       rust
+  pattern  { $X == true }
+  fix      "$X"
+  test {
+    match    "fn f() { if ready == true { go() } }"
+    no_match "fn f() { if ready { go() } }"
+    no_match "fn f() { if x == 1 { go() } }"
+  }
+}

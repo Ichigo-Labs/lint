@@ -1,0 +1,14 @@
+rule empty-catch-block {
+  message  "empty catch block swallows the exception silently; log it or let it propagate"
+  severity warning
+  in       csharp
+  note     "Catching and ignoring an exception hides real failures. At minimum log it; if it is truly expected, add a comment explaining why."
+  query    "(catch_clause) @match"
+  where    $match matches "\\{\\s*\\}\\s*$"
+  test {
+    match    "class C { void M() { try { F(); } catch { } } }"
+    match    "class C { void M() { try { F(); } catch (Exception ex) { } } }"
+    no_match "class C { void M() { try { F(); } catch (Exception ex) { Log(ex); } } }"
+    no_match "class C { void M() { try { F(); } catch { throw; } } }"
+  }
+}

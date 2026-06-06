@@ -1,0 +1,29 @@
+rule raw-new {
+  message  "raw 'new'; prefer std::make_unique / std::make_shared or a stack object (RAII)"
+  severity warning
+  note     "Owning raw pointers leak on early return/exception. Smart pointers express and enforce ownership."
+  in       cpp
+  query    "(new_expression) @match"
+
+  test {
+    match    "void f() { int* a = new int; }"
+    match    "void f() { int* b = new int(5); }"
+    match    "void f() { int* c = new int[10]; }"
+    match    "struct T{}; void f() { T* d = new T(); }"
+    no_match "void f() { int a = 5; }"
+  }
+}
+
+rule raw-delete {
+  message  "raw 'delete'; ownership should be managed by a smart pointer or container instead"
+  severity warning
+  note     "Manual delete is easy to miss on some code paths and to double-free; let RAII own the lifetime."
+  in       cpp
+  query    "(delete_expression) @match"
+
+  test {
+    match    "void f(int* p) { delete p; }"
+    match    "void f(int* a) { delete[] a; }"
+    no_match "void f() { int x = 0; }"
+  }
+}

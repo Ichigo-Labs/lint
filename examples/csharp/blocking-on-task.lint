@@ -1,0 +1,16 @@
+rule blocking-on-task {
+  message  "blocking on a Task with .Result/.Wait() can deadlock; 'await' the task instead"
+  severity warning
+  in       csharp
+  note     "On a thread with a synchronization context (UI, classic ASP.NET) .Result and .Wait() block the captured context and can deadlock. Prefer 'await'."
+  any {
+    pattern { $T.Result }
+    pattern { $T.Wait() }
+  }
+  test {
+    match    "class C { void M() { var x = GetAsync().Result; } }"
+    match    "class C { void M() { DoAsync().Wait(); } }"
+    no_match "class C { async Task M() { var x = await GetAsync(); } }"
+    no_match "class C { void M() { var x = result.Value; } }"
+  }
+}

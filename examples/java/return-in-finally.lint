@@ -1,0 +1,13 @@
+rule return-in-finally {
+  message  "return inside a finally block discards exceptions and other return values"
+  severity error
+  note     "A return (or break/continue) in finally overrides any return or pending exception from the try/catch, hiding failures."
+  in       java
+  query    "(return_statement) @match"
+  inside query "(finally_clause) @f"
+  test {
+    match    "class C { int m() { try { return work(); } finally { return 0; } } }"
+    no_match "class C { int m() { try { return work(); } finally { cleanup(); } } }"
+    no_match "class C { int m() { return work(); } }"
+  }
+}

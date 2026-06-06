@@ -1,0 +1,37 @@
+rule print-stack-trace {
+  message  "do not call printStackTrace(); log the exception through your logging framework"
+  severity warning
+  note     "printStackTrace writes to System.err and loses log context, levels and routing."
+  in       java
+  pattern  { $E.printStackTrace($$$A) }
+  test {
+    match    "class C { void m() { try { x(); } catch (Exception e) { e.printStackTrace(); } } }"
+    no_match "class C { void m(org.slf4j.Logger log) { try { x(); } catch (Exception e) { log.error(\"failed\", e); } } }"
+  }
+}
+
+rule empty-catch-block {
+  message  "empty catch block silently swallows the exception"
+  severity error
+  note     "At minimum log the exception, or document with a comment why it is safe to ignore."
+  in       java
+  query    "(catch_clause body: (block \"{\" . \"}\") @match)"
+  test {
+    match    "class C { void m() { try { x(); } catch (Exception e) {} } }"
+    no_match "class C { void m(org.slf4j.Logger log) { try { x(); } catch (Exception e) { log.warn(\"ignored\", e); } } }"
+  }
+}
+
+rule broad-exception-catch {
+  message  "catching $T is too broad; catch the specific exception(s) you can handle"
+  severity warning
+  note     "Catching Exception/Throwable/RuntimeException also traps bugs (NPEs, IllegalState) and control-flow you did not intend to handle."
+  in       java
+  query    "(catch_clause (catch_formal_parameter (catch_type (type_identifier) @T)) ) @match"
+  where    $T in [Exception, Throwable, RuntimeException]
+  test {
+    match    "class C { void m() { try { x(); } catch (Exception e) { handle(e); } } }"
+    match    "class C { void m() { try { x(); } catch (Throwable t) { handle(t); } } }"
+    no_match "class C { void m() { try { x(); } catch (java.io.IOException e) { handle(e); } } }"
+  }
+}

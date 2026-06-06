@@ -1,0 +1,33 @@
+rule return-in-init {
+  message  "__init__ must not return a value — it always returns None"
+  severity error
+  note     "Returning a non-None value from __init__ raises TypeError at instantiation. Move the value elsewhere or use a classmethod factory."
+  in       python
+
+  pattern { return $VALUE }
+  where    $VALUE != "None"
+  inside pattern {
+    def __init__($$$ARGS):
+        $$$BODY
+  }
+
+  test {
+    match """
+class Account:
+    def __init__(self, balance):
+        self.balance = balance
+        return balance
+"""
+    no_match """
+class Account:
+    def __init__(self, balance):
+        self.balance = balance
+        return
+"""
+    no_match """
+class Account:
+    def total(self, balance):
+        return balance
+"""
+  }
+}

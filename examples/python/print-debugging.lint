@@ -1,0 +1,15 @@
+rule print-debugging {
+  message  "Leftover print() call — use the logging module instead"
+  severity info
+  note     "print() writes to stdout unconditionally and is easy to forget. Prefer logging.debug/info so output can be configured and filtered."
+  in       python
+
+  pattern { print($$$ARGS) }
+
+  test {
+    match    "print('reached here', value)"
+    match    "print()"
+    no_match "logging.debug('reached here', value)"
+    no_match "self.print(value)"
+  }
+}

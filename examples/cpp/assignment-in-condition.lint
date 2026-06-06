@@ -1,0 +1,13 @@
+rule assignment-in-if-condition {
+  message  "assignment ('=') used in an if condition; did you mean '=='?"
+  severity warning
+  note     "If the assignment is intentional, make it explicit by wrapping it in extra parentheses or comparing the result."
+  in       cpp
+  query    "(if_statement condition: (condition_clause value: (assignment_expression) @match))"
+
+  test {
+    match    "void f(int a, int b) { if (a = b) { g(); } }"
+    no_match "void f(int a, int b) { if (a == b) { g(); } }"
+    no_match "void f(int a, int b) { a = b; if (a) { g(); } }"
+  }
+}

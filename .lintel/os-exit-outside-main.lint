@@ -1,0 +1,28 @@
+rule os-exit-outside-main {
+  message  "avoid os.Exit outside main(); return an error and let main set the exit code"
+  severity warning
+  note     "os.Exit terminates the process immediately, skipping deferred cleanup and making the function impossible to unit-test. In command handlers and library code, return an error and call os.Exit in exactly one place (main)."
+  in       go
+
+  pattern { os.Exit($$$) }
+  not inside pattern { func main() { $$$ } }
+
+  test {
+    match    """
+package cli
+func runCheck() {
+	if failed {
+		os.Exit(1)
+	}
+}
+"""
+    no_match """
+package main
+func main() {
+	if err := run(); err != nil {
+		os.Exit(1)
+	}
+}
+"""
+  }
+}

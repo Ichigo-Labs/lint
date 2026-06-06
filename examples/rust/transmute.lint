@@ -1,0 +1,18 @@
+rule mem_transmute {
+  message  "mem::transmute is extremely unsafe; prefer safe casts (as, from_bits, bytemuck)"
+  severity error
+  note     "transmute reinterprets bytes with no checks and is a frequent source of UB"
+  in       rust
+  any {
+    pattern { std::mem::transmute($$$) }
+    pattern { mem::transmute($$$) }
+    pattern { transmute($$$) }
+  }
+  test {
+    match    "fn f() { let x: u32 = unsafe { mem::transmute(1.0f32) }; }"
+    match    "fn f() { let x: u32 = unsafe { std::mem::transmute(1.0f32) }; }"
+    match    "fn f() { let x: u32 = unsafe { transmute(1.0f32) }; }"
+    no_match "fn f() { let x = 1.0f32 as u32; }"
+    no_match "fn f() { let x = u32::from_bits(1); }"
+  }
+}

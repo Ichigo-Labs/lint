@@ -1,0 +1,17 @@
+rule assert-statement {
+  message  "Avoid 'assert' for runtime validation — it is stripped when Python runs with -O"
+  severity info
+  note     "Assertions are removed under the -O optimization flag. For checks that must always run (input validation, invariants in production), raise an explicit exception instead."
+  in       python
+
+  any {
+    pattern { assert $COND }
+    pattern { assert $COND, $MSG }
+  }
+
+  test {
+    match    "assert user.is_authenticated"
+    match    "assert amount > 0, 'amount must be positive'"
+    no_match "if amount <= 0:\n    raise ValueError('amount must be positive')"
+  }
+}

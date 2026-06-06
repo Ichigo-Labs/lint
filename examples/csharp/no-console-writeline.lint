@@ -1,0 +1,16 @@
+rule no-console-writeline {
+  message  "avoid Console.WriteLine/Write in application code; use a structured logger (ILogger)"
+  severity info
+  in       csharp
+  note     "Console output is hard to filter, route, or disable in production. Inject ILogger and log at an appropriate level instead."
+  any {
+    pattern { Console.WriteLine($$$ARGS) }
+    pattern { Console.Write($$$ARGS) }
+  }
+  test {
+    match    "class C { void M() { Console.WriteLine(\"hello\"); } }"
+    match    "class C { void M() { Console.Write(value); } }"
+    no_match "class C { void M() { logger.LogInformation(\"hello\"); } }"
+    no_match "class C { void M() { sb.WriteLine(\"hello\"); } }"
+  }
+}

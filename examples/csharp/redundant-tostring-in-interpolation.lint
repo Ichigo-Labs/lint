@@ -1,0 +1,14 @@
+rule redundant-tostring-in-interpolation {
+  message  "redundant .ToString() inside an interpolated string; interpolation already calls ToString()"
+  severity info
+  in       csharp
+  note     "String interpolation formats each hole by calling ToString() (with culture/format support). Calling it yourself is noise."
+  query    "(interpolation (invocation_expression function: (member_access_expression expression: (_) @recv name: (identifier) @name) arguments: (argument_list)) @match)"
+  where    $name == "ToString"
+  fix      "$recv"
+  test {
+    match    "class C { string M(int x) { return $\"value is {x.ToString()}\"; } }"
+    no_match "class C { string M(int x) { return $\"value is {x}\"; } }"
+    no_match "class C { string M(int x) { return x.ToString(); } }"
+  }
+}

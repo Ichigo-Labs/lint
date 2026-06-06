@@ -1,0 +1,15 @@
+rule no-var {
+  message  "Use `let` or `const` instead of `var`"
+  severity warning
+  in       typescript
+  note     "`var` is function-scoped and hoisted; `let`/`const` are block-scoped and safer."
+
+  pattern { var $NAME = $VAL; }
+  fix      "let $NAME = $VAL;"
+
+  test {
+    match    "var count = 0;"
+    no_match "let count = 0;"
+    no_match "const count = 0;"
+  }
+}

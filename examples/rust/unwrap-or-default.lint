@@ -1,0 +1,12 @@
+rule unwrap_or_default {
+  message  "use .unwrap_or_default() instead of .unwrap_or(Default::default())"
+  severity info
+  in       rust
+  pattern  { $X.unwrap_or(Default::default()) }
+  fix      "$X.unwrap_or_default()"
+  test {
+    match    "fn f() { let v = maybe.unwrap_or(Default::default()); }"
+    no_match "fn f() { let v = maybe.unwrap_or(0); }"
+    no_match "fn f() { let v = maybe.unwrap_or_default(); }"
+  }
+}

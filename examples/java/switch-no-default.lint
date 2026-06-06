@@ -1,0 +1,12 @@
+rule switch-no-default {
+  message  "switch statement has no default branch; unhandled values fall through silently"
+  severity warning
+  note     "A default branch documents intent and catches values added later (e.g. new enum constants)."
+  in       java
+  query    "(switch_expression body: (switch_block)) @match"
+  not has query "(switch_label \"default\") @d"
+  test {
+    match    "class C { void m(int x) { switch (x) { case 1: f(); break; } } }"
+    no_match "class C { void m(int x) { switch (x) { case 1: f(); break; default: g(); } } }"
+  }
+}

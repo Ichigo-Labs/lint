@@ -1,0 +1,15 @@
+rule no-console-output {
+  message  "use a logger (SLF4J/Log4j) instead of System.$STREAM for diagnostics"
+  severity warning
+  note     "System.out / System.err writes bypass log levels, appenders and formatting; they are hard to silence or route in production."
+  in       java
+  pattern  { System.$STREAM.$M($$$A) }
+  where    $STREAM in [out, err]
+  where    $M in [print, println, printf, write, format]
+  test {
+    match    "class C { void m() { System.out.println(\"hi\"); } }"
+    match    "class C { void m() { System.err.print(\"oops\"); } }"
+    no_match "class C { void m(java.io.PrintStream ps) { ps.println(\"hi\"); } }"
+    no_match "class C { void m(org.slf4j.Logger log) { log.info(\"hi\"); } }"
+  }
+}

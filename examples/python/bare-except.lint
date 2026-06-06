@@ -1,0 +1,34 @@
+rule bare-except {
+  message  "Avoid a bare 'except:' — catch a specific exception type instead"
+  severity warning
+  note     "A bare except also catches KeyboardInterrupt and SystemExit, which usually should propagate. Use 'except Exception:' or a narrower type."
+  in       python
+
+  pattern {
+    try:
+        $$$BODY
+    except:
+        $$$HANDLER
+  }
+
+  test {
+    match """
+try:
+    do_work()
+except:
+    pass
+"""
+    no_match """
+try:
+    do_work()
+except ValueError:
+    pass
+"""
+    no_match """
+try:
+    do_work()
+except Exception as e:
+    log(e)
+"""
+  }
+}

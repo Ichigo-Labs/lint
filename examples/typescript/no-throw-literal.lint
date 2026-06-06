@@ -1,0 +1,15 @@
+rule no-throw-literal {
+  message  "Throw an Error object, not a string literal"
+  severity warning
+  in       typescript
+  note     "Throwing a non-Error loses the stack trace and breaks `instanceof Error` checks."
+
+  pattern { throw $X; }
+  where    $X kind string
+
+  test {
+    match    "throw 'something went wrong';"
+    no_match "throw new Error('something went wrong');"
+    no_match "throw err;"
+  }
+}

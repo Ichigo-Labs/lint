@@ -1,0 +1,14 @@
+rule rethrow-preserve-stack {
+  message  "use 'throw;' to rethrow $thrown and preserve the original stack trace"
+  severity warning
+  in       csharp
+  note     "'throw ex;' resets the exception's stack trace to this line, hiding where the error actually originated. A bare 'throw;' rethrows in place."
+  query    "(catch_clause (catch_declaration name: (identifier) @name) body: (block (throw_statement (identifier) @thrown) @match))"
+  where    $thrown == $name
+  fix      "throw;"
+  test {
+    match    "class C { void M() { try { F(); } catch (Exception ex) { Log(ex); throw ex; } } }"
+    no_match "class C { void M() { try { F(); } catch (Exception ex) { throw; } } }"
+    no_match "class C { void M() { try { F(); } catch (Exception ex) { throw new InvalidOperationException(\"wrap\", ex); } } }"
+  }
+}

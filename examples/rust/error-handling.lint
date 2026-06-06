@@ -1,0 +1,24 @@
+rule no_unwrap {
+  message  "avoid .unwrap(); propagate with ? or handle the error explicitly"
+  severity warning
+  note     ".unwrap() panics on None/Err and crashes the program at runtime"
+  in       rust
+  pattern  { $X.unwrap() }
+  test {
+    match    "fn f() { let v = read_file().unwrap(); }"
+    no_match "fn f() { let v = read_file()?; }"
+    no_match "fn f() { let v = read_file().unwrap_or_default(); }"
+  }
+}
+
+rule no_expect {
+  message  "avoid .expect(); propagate with ? or handle the error explicitly"
+  severity warning
+  note     ".expect() panics just like .unwrap(), only with a custom message"
+  in       rust
+  pattern  { $X.expect($MSG) }
+  test {
+    match    "fn f() { let v = read_file().expect(\"could not read\"); }"
+    no_match "fn f() { let v = read_file()?; }"
+  }
+}

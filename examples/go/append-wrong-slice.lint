@@ -1,0 +1,41 @@
+rule append-wrong-slice {
+  message  "append result stored in $DST but it appends to $SRC — likely the wrong slice"
+  severity warning
+  note     "`$DST = append($SRC, ...)` with a different source slice is a common copy/paste bug. If intentional, append to $DST or use a clearer copy."
+  in       go
+
+  # Back-reference inequality: destination differs from the appended-to slice.
+  any {
+    pattern { $DST = append($SRC, $$$) }
+    pattern { $DST := append($SRC, $$$) }
+  }
+  where $DST != $SRC
+
+  test {
+    match    """
+package p
+func f(a, b []int, x int) {
+	a = append(b, x)
+}
+"""
+    match    """
+package p
+func f(b []int, x int) {
+	a := append(b, x)
+	_ = a
+}
+"""
+    no_match """
+package p
+func f(a []int, x int) {
+	a = append(a, x)
+}
+"""
+    no_match """
+package p
+func f(a []int, x int) {
+	a = append(a, x, x)
+}
+"""
+  }
+}

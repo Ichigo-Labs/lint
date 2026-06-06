@@ -1,0 +1,36 @@
+rule string-reference-equality {
+  message  "compare String contents with .equals(), not == (reference identity)"
+  severity error
+  note     "== compares object identity; two equal strings may be different objects, so == gives wrong results for content comparison."
+  in       java
+  any {
+    pattern { $A == $STR }
+    pattern { $STR == $A }
+  }
+  where    $STR kind string_literal
+  where    $A not kind string_literal
+  fix      "$A.equals($STR)"
+  test {
+    match    "class C { boolean m(String s) { return s == \"ready\"; } }"
+    match    "class C { boolean m(String s) { return \"ready\" == s; } }"
+    no_match "class C { boolean m(String s) { return s.equals(\"ready\"); } }"
+    no_match "class C { boolean m(int a, int b) { return a == b; } }"
+  }
+}
+
+rule self-comparison {
+  message  "comparing $X to itself is always true/false and is almost certainly a bug"
+  severity warning
+  note     "A reused metavariable ($X ... $X) back-references the same source text, so this only fires on identical operands."
+  in       java
+  any {
+    pattern { $X == $X }
+    pattern { $X != $X }
+  }
+  where    $X not kind string_literal
+  test {
+    match    "class C { boolean m(int a) { return a == a; } }"
+    match    "class C { boolean m(int a) { return a != a; } }"
+    no_match "class C { boolean m(int a, int b) { return a == b; } }"
+  }
+}

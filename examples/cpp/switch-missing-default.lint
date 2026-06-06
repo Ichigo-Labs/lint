@@ -1,0 +1,14 @@
+rule switch-missing-default {
+  message  "switch statement has no 'default' case; unhandled values fall through silently"
+  severity warning
+  note     "Add a 'default:' branch (even one that asserts/throws) so new enum values or unexpected inputs are caught."
+  in       cpp
+  pattern  { switch ($X) { $$$; } }
+  not has  pattern { default: $S; }
+
+  test {
+    match    "void f(int x) { switch (x) { case 1: a(); break; case 2: b(); break; } }"
+    no_match "void f(int x) { switch (x) { case 1: a(); break; default: c(); } }"
+    no_match "void f(int x) { if (x) a(); }"
+  }
+}

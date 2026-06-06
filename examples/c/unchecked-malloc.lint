@@ -1,0 +1,21 @@
+rule unchecked-malloc {
+  message  "the result of malloc/calloc is used without a NULL check; allocation can fail and dereferencing $PV would crash"
+  severity warning
+  note     "Heuristic: flags a function that allocates into a pointer via 'TYPE *p = malloc(...)' but contains no 'p == NULL', 'p != NULL', or '!p' guard. A truthiness check 'if (p)' is not recognised and may cause a false positive."
+  in       c, cpp
+  query "(function_definition) @match"
+  has any {
+    pattern { $T *$PV = malloc($$$A); }
+    pattern { $T *$PV = calloc($$$A); }
+  }
+  not has pattern { $PV == NULL }
+  not has pattern { $PV != NULL }
+  not has pattern { !$PV }
+  test {
+    match    "void f(const char *s){ char *p = malloc(10); strcpy(p, s); }"
+    match    "void f(void){ int *p = calloc(4, sizeof(int)); p[0] = 1; }"
+    no_match "void g(const char *s){ char *p = malloc(10); if (p == NULL) { return; } strcpy(p, s); }"
+    no_match "void h(const char *s){ char *p = malloc(10); if (!p) return; strcpy(p, s); }"
+    no_match "void i(const char *s){ char *p = malloc(10); if (p != NULL) strcpy(p, s); }"
+  }
+}

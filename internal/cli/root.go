@@ -1,0 +1,50 @@
+// Package cli wires the lintel command-line interface.
+package cli
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+)
+
+// version is overridden at build time with -ldflags.
+var version = "0.1.0-dev"
+
+// Execute runs the lintel CLI.
+func Execute() {
+	if err := newRootCmd().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "lintel:", err)
+		os.Exit(2)
+	}
+}
+
+func newRootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "lintel [paths...]",
+		Short: "lintel — write project lint rules fast, run them across many languages",
+		Long: `lintel finds rule violations in your code using structural patterns.
+
+Rules live in .lintel/ directories as NAME.lint files written in a small DSL
+that matches code by its syntax tree (not regex), across C#, Java, C/C++, Rust,
+Go, TypeScript, and Python.
+
+Running 'lintel' with no subcommand checks the current directory.`,
+		Args:          cobra.ArbitraryArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCheck(cmd, args)
+		},
+		Version: version,
+	}
+	addCheckFlags(root)
+
+	root.AddCommand(newCheckCmd())
+	root.AddCommand(newTestCmd())
+	root.AddCommand(newListCmd())
+	root.AddCommand(newParseCmd())
+	root.AddCommand(newNewCmd())
+	root.AddCommand(newLangsCmd())
+	return root
+}

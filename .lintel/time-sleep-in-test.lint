@@ -1,0 +1,32 @@
+rule time-sleep-in-test {
+  message  "time.Sleep in a test makes it slow and flaky"
+  severity warning
+  note     "Sleeping to wait for state produces slow, nondeterministic tests. Synchronize with channels, sync.WaitGroup, or poll with a deadline instead."
+  in       go
+
+  # Only flag sleeps that live inside a *testing.T test function.
+  pattern { time.Sleep($$$) }
+  inside pattern { func $_($_ *testing.T) { $$$ } }
+
+  test {
+    match    """
+package p
+func TestThing(t *testing.T) {
+	go start()
+	time.Sleep(100 * time.Millisecond)
+	check(t)
+}
+"""
+    no_match """
+package p
+func retry() {
+	for {
+		time.Sleep(time.Second)
+		if done() {
+			return
+		}
+	}
+}
+"""
+  }
+}

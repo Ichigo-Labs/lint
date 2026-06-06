@@ -1,0 +1,50 @@
+rule error-equality {
+  message  "compare errors with errors.Is, not `$ERR == $TARGET`"
+  severity warning
+  note     "Comparing an error against a sentinel with == breaks the moment the error is wrapped with %w. Use errors.Is($ERR, $TARGET) instead. (Comparisons to nil are fine and are not flagged, since nil is not a sentinel selector.)"
+  in       go
+
+  # $TARGET being a selector (io.EOF, sql.ErrNoRows, ...) signals a sentinel,
+  # which keeps this off `err == nil` and other ordinary comparisons.
+  pattern { $ERR == $TARGET }
+  where   $ERR matches "(?i)err"
+  where   $TARGET kind selector_expression
+
+  test {
+    match    """
+package p
+func read() error {
+	if err == io.EOF {
+		return nil
+	}
+	return err
+}
+"""
+    match    """
+package p
+func read() error {
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	return err
+}
+"""
+    no_match """
+package p
+func read() error {
+	if err != nil {
+		return err
+	}
+	return nil
+}
+"""
+    no_match """
+package p
+func read() {
+	if mode == config.Debug {
+		return
+	}
+}
+"""
+  }
+}

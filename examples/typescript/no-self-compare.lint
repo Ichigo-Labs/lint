@@ -1,0 +1,14 @@
+rule no-self-compare {
+  message  "Comparing a value to itself is always true; this is likely a bug"
+  severity error
+  in       typescript
+  note     "A back-reference: both sides of the comparison are the same expression."
+
+  pattern { $X === $X }
+
+  test {
+    match    "if (count === count) { reset(); }"
+    no_match "if (count === other) { reset(); }"
+    no_match "if (a === b) { reset(); }"
+  }
+}

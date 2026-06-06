@@ -1,0 +1,12 @@
+rule redundant_self_assignment {
+  message  "redundant self-assignment; $X is assigned to itself and has no effect"
+  severity error
+  note     "this is almost always a typo for assigning a different value"
+  in       rust
+  pattern  { $X = $X }
+  test {
+    match    "fn f() { let mut a = 1; a = a; }"
+    no_match "fn f() { let mut a = 1; a = b; }"
+    no_match "fn f() { let mut a = 1; a = a + 1; }"
+  }
+}

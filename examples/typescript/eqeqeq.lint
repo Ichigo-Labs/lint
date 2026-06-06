@@ -1,0 +1,15 @@
+rule eqeqeq {
+  message  "Use `===` instead of `==` to avoid type coercion"
+  severity warning
+  in       typescript
+  note     "Loose equality performs implicit type coercion and is a common source of bugs."
+
+  pattern { $A == $B }
+  fix      "$A === $B"
+
+  test {
+    match    "if (a == b) { return true; }"
+    no_match "if (a === b) { return true; }"
+    no_match "if (a != b) { return true; }"
+  }
+}

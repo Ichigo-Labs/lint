@@ -1,0 +1,15 @@
+rule prefer-nullptr {
+  message  "use 'nullptr' instead of NULL"
+  severity warning
+  note     "NULL is an integer constant (often 0); nullptr is a real null-pointer type and overload-resolves correctly."
+  in       cpp
+  pattern  { NULL }
+  fix      "nullptr"
+
+  test {
+    match    "void f() { int* p = NULL; }"
+    match    "void g(int* p) { if (p == NULL) return; }"
+    no_match "void f() { int* p = nullptr; }"
+    no_match "void f() { int n = 0; }"
+  }
+}

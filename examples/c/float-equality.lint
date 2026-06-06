@@ -1,0 +1,17 @@
+rule float-literal-equality {
+  message  "equality comparison against a floating-point literal is unreliable due to rounding; compare against an epsilon tolerance instead"
+  severity warning
+  note     "Detected by a floating-point literal (decimal point, exponent, or f/F suffix) on either side of '=='. Two values that look equal may differ in their least significant bits."
+  in       c, cpp
+  any {
+    query "((binary_expression left: (number_literal) @n operator: \"==\") @match (#match? @n \"[.eEfF]\"))"
+    query "((binary_expression operator: \"==\" right: (number_literal) @n) @match (#match? @n \"[.eEfF]\"))"
+  }
+  test {
+    match    "int f(double x){ if (x == 1.0) return 1; return 0; }"
+    match    "int f(double x){ if (3.14 == x) return 1; return 0; }"
+    match    "int f(double x){ if (x == 2.5e3) return 1; return 0; }"
+    no_match "int f(int a, int b){ if (a == b) return 1; return 0; }"
+    no_match "int f(int a){ if (a == 5) return 1; return 0; }"
+  }
+}

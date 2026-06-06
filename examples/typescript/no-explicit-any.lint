@@ -1,0 +1,17 @@
+rule no-explicit-any {
+  message  "Avoid the `any` type; prefer `unknown` or a precise type"
+  severity warning
+  in       typescript
+  note     "`any` disables type checking for the value and silently spreads through the codebase."
+
+  query "(predefined_type) @match"
+  where $match == "any"
+
+  test {
+    match    "let x: any = getValue();"
+    match    "function f(arg: any) { return arg; }"
+    match    "const y = value as any;"
+    no_match "let x: unknown = getValue();"
+    no_match "function f(arg: string) { return arg; }"
+  }
+}

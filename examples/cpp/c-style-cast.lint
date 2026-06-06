@@ -1,0 +1,16 @@
+rule c-style-cast {
+  message  "C-style cast '($T)...'; prefer static_cast<$T>(...) (or reinterpret_cast/const_cast when truly needed)"
+  severity warning
+  note     "Named C++ casts are searchable and checked by the compiler; the '(void)x' idiom for discarding a value is intentionally allowed."
+  in       cpp
+  pattern  { ($T)$X }
+  where    $T != "void"
+  fix      "static_cast<$T>($X)"
+
+  test {
+    match    "void f(double d) { int n = (int)d; }"
+    match    "long g(void* p) { return (long)p; }"
+    no_match "void f(int* p) { (void)p; }"
+    no_match "void f(double d) { int n = static_cast<int>(d); }"
+  }
+}
