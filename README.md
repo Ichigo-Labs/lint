@@ -97,8 +97,9 @@ lint version                       # print version, commit, and build info
 | `where` predicates | Constrain captures by regex, node kind, membership, equality, **numeric** bounds, variadic **`count`**, or a sub-pattern |
 | `let` definitions | Name a list/regex once (`let DEBUG = [...]`) and reuse it as `@DEBUG` across rules |
 | Structural context | `inside` / `has`, ordering `precedes` / `follows`, depth-1 `directly inside` / `directly has` (each with `not`) |
-| `any` / `all` / `not` | Combine matchers with boolean logic |
+| `any` / `all` / `not` | Combine matchers with boolean logic, including branch-scoped `where` predicates inside `any` / `all` |
 | Raw queries | Drop to a Tree-sitter s-expression `query "..."` when patterns aren't enough |
+| Path scoping | Limit a rule to files via `paths` / `exclude` globs (`*`, `?`, `**`) |
 | Autofix | `fix "..."` templates rewritten by `lint check --fix` |
 | Inline tests | `test { match ... no_match ... }` run by `lint test` |
 | Suppression | `// lint:ignore [rule]` and `// lint:ignore-next-line` comments silence findings |

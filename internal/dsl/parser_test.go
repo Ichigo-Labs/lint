@@ -935,3 +935,49 @@ func TestMalformedInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestPathsAndExcludeFields(t *testing.T) {
+	r := parseOne(t, `rule r {
+  in typescript
+  paths "src/components/**", "lib/**"
+  exclude "**/*.test.ts"
+  pattern { f($X) }
+}`)
+	if !eqStrings(r.Paths, []string{"src/components/**", "lib/**"}) {
+		t.Fatalf("Paths = %v", r.Paths)
+	}
+	if !eqStrings(r.ExcludePaths, []string{"**/*.test.ts"}) {
+		t.Fatalf("ExcludePaths = %v", r.ExcludePaths)
+	}
+}
+
+func TestPathsBracketList(t *testing.T) {
+	r := parseOne(t, `rule r {
+  in typescript
+  paths ["a/**", "b/**"]
+  pattern { f($X) }
+}`)
+	if !eqStrings(r.Paths, []string{"a/**", "b/**"}) {
+		t.Fatalf("Paths = %v", r.Paths)
+	}
+}
+
+func TestBranchScopedWhereParses(t *testing.T) {
+	r := parseOne(t, `rule r {
+  in go
+  any {
+    all { pattern { f($X) } where $X matches "^a" }
+    pattern { g($Y) }
+  }
+}`)
+	if r.Match == nil || r.Match.Kind != dsl.MatchAny {
+		t.Fatalf("expected top-level any matcher, got %+v", r.Match)
+	}
+	first := r.Match.Children[0]
+	if first.Kind != dsl.MatchAll {
+		t.Fatalf("expected first branch to be all, got %v", first.Kind)
+	}
+	if len(first.Where) != 1 {
+		t.Fatalf("expected 1 branch-scoped where, got %d", len(first.Where))
+	}
+}

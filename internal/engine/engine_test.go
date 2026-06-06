@@ -357,3 +357,71 @@ func f() {
 }`)
 	wantN(t, fs, 1)
 }
+
+func TestBranchScopedWhere(t *testing.T) {
+	// A `where` inside an `all { ... }` branch constrains only that branch: the
+	// f(...) branch is limited to args starting with "a"; the g(...) branch is
+	// unrestricted.
+	rule := `rule r { in go
+  any {
+    all { pattern { f($X) } where $X matches "^a" }
+    pattern { g($Y) }
+  }
+}`
+	fs := run(t, "go", rule, `package main
+
+func run() {
+f(apple)
+f(zebra)
+g(anything)
+}`)
+	wantN(t, fs, 2)
+	got := snippets(fs)
+	for _, s := range got {
+		if s == "f(zebra)" {
+			t.Fatalf("f(zebra) should be excluded by branch-scoped where; got %v", got)
+		}
+	}
+}
+
+func TestBranchScopedWhereDoesNotLeak(t *testing.T) {
+	// The branch `where` must not apply to sibling branches: g(...) matches even
+	// though its arg fails the f-branch predicate.
+	rule := `rule r { in go
+  any {
+    all { pattern { f($X) } where $X matches "^a" }
+    all { pattern { g($Y) } where $Y matches "^z" }
+  }
+}`
+	fs := run(t, "go", rule, `package main
+
+func run() {
+f(apple)
+f(zebra)
+g(apple)
+g(zebra)
+}`)
+	wantN(t, fs, 2)
+}
+
+func TestBranchScopedWhereAsFilterChild(t *testing.T) {
+	// A combinator carrying a `where` used as a non-generating filter child of an
+	// outer `all`: the generator is f($X); the filtering branch additionally
+	// requires the capture to start with "a".
+	rule := `rule r { in go
+  all {
+    pattern { f($X) }
+    all { pattern { f($X) } where $X matches "^a" }
+  }
+}`
+	fs := run(t, "go", rule, `package main
+
+func run() {
+f(apple)
+f(zebra)
+}`)
+	wantN(t, fs, 1)
+	if got := snippets(fs); got[0] != "f(apple)" {
+		t.Fatalf("expected f(apple), got %v", got)
+	}
+}

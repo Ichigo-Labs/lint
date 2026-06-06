@@ -35,6 +35,13 @@ type Rule struct {
 	// Where holds metavariable predicates that every candidate must satisfy.
 	Where []Constraint
 
+	// Paths, when non-empty, restricts the rule to files whose path matches one
+	// of these globs (supporting `*`, `?`, and `**`). ExcludePaths removes files
+	// matching any of its globs. Both are evaluated against the file path
+	// relative to the working directory.
+	Paths        []string
+	ExcludePaths []string
+
 	// Relations are structural context filters (inside / has, and negations).
 	Relations []Relation
 
@@ -82,6 +89,12 @@ type Matcher struct {
 	Children []*Matcher
 	// Not.
 	Sub *Matcher
+
+	// Where holds constraints scoped to this matcher: when this matcher is one
+	// branch of an `any { ... }` / `all { ... }`, these predicates apply only to
+	// that branch's matches (not the whole rule). Rule-level constraints live on
+	// Rule.Where instead.
+	Where []Constraint
 
 	Pos Position
 }

@@ -490,3 +490,65 @@ func TestRunRuleTests(t *testing.T) {
 		}
 	}
 }
+
+// TestPathScoping verifies a rule's `paths`/`exclude` globs restrict which files
+// it applies to.
+func TestPathScoping(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	writeFile(t, filepath.Join(root, ".lint", "console.lint"), `rule no_console {
+  in typescript
+  paths "src/components/**"
+  exclude "**/*.test.ts"
+  message "avoid console.log"
+  pattern { console.log($$$) }
+}`)
+	writeFile(t, filepath.Join(root, "src", "components", "Button.ts"), `console.log("a");`+"\n")
+	writeFile(t, filepath.Join(root, "src", "components", "Button.test.ts"), `console.log("b");`+"\n")
+	writeFile(t, filepath.Join(root, "src", "util.ts"), `console.log("c");`+"\n")
+	t.Chdir(root)
+
+	rs, lerrs, err := Load(".", "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(lerrs) != 0 {
+		t.Fatalf("unexpected load errors: %v", lerrs)
+	}
+	res, err := rs.Check(Options{Paths: []string{"."}})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	got := collectKeys(res.Findings)
+	want := []string{filepath.Join("src", "components", "Button.ts") + "|no_console"}
+	if !equalStrings(got, want) {
+		t.Fatalf("path-scoped findings = %v, want %v", got, want)
+	}
+}
+
+func TestGlobMatch(t *testing.T) {
+	cases := []struct {
+		glob, path string
+		want       bool
+	}{
+		{"src/components/**", "src/components/Button.ts", true},
+		{"src/components/**", "src/components/a/b/Button.ts", true},
+		{"src/components/**", "src/util.ts", false},
+		{"src/*.ts", "src/util.ts", true},
+		{"src/*.ts", "src/a/util.ts", false},
+		{"**/*.test.ts", "src/components/Button.test.ts", true},
+		{"**/*.test.ts", "Button.test.ts", true},
+		{"**/*.test.ts", "Button.ts", false},
+		{"src/**/x.ts", "src/x.ts", true},
+		{"src/**/x.ts", "src/a/b/x.ts", true},
+		{"src/v1.2/*.ts", "src/v1.2/a.ts", true},
+		{"src/v1.2/*.ts", "src/v1x2/a.ts", false},
+	}
+	for _, c := range cases {
+		if got := globMatch(c.glob, c.path); got != c.want {
+			t.Errorf("globMatch(%q, %q) = %v, want %v", c.glob, c.path, got, c.want)
+		}
+	}
+}

@@ -203,6 +203,9 @@ func (rs *RuleSet) checkFile(path string, langFilter, tagFilter map[string]bool)
 		if rs.config.isDisabled(cr.ID) {
 			continue
 		}
+		if !pathMatches(cr, rp) {
+			continue
+		}
 		if len(tagFilter) > 0 && !anyTag(cr, tagFilter) {
 			continue
 		}
@@ -296,7 +299,11 @@ func reportPath(path string) string {
 		return path
 	}
 	rel, err := filepath.Rel(cwd, abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if err != nil {
+		return path
+	}
+	slash := filepath.ToSlash(rel)
+	if slash == ".." || strings.HasPrefix(slash, "../") {
 		return path
 	}
 	return rel

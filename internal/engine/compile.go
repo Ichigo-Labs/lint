@@ -56,6 +56,10 @@ type CompiledRule struct {
 	Tags     []string
 	Fix      *string
 
+	// Paths/ExcludePaths are file-path globs scoping the rule (empty = all).
+	Paths        []string
+	ExcludePaths []string
+
 	langs  []*lang.Language
 	byLang map[string]*langRule
 	raw    *dsl.Rule
@@ -91,6 +95,7 @@ type compiledMatcher struct {
 	querySrc string
 	children []*compiledMatcher
 	sub      *compiledMatcher
+	where    []compiledConstraint
 }
 
 type compiledConstraint struct {
@@ -114,15 +119,17 @@ type compiledRelation struct {
 // every language whose grammar can parse its patterns.
 func Compile(r *dsl.Rule) (*CompiledRule, error) {
 	cr := &CompiledRule{
-		ID:       r.ID,
-		Message:  r.Message,
-		Note:     r.Note,
-		Severity: r.Severity,
-		URL:      r.URL,
-		Tags:     r.Tags,
-		Fix:      r.Fix,
-		byLang:   map[string]*langRule{},
-		raw:      r,
+		ID:           r.ID,
+		Message:      r.Message,
+		Note:         r.Note,
+		Severity:     r.Severity,
+		URL:          r.URL,
+		Tags:         r.Tags,
+		Fix:          r.Fix,
+		Paths:        r.Paths,
+		ExcludePaths: r.ExcludePaths,
+		byLang:       map[string]*langRule{},
+		raw:          r,
 	}
 
 	var targets []*lang.Language
@@ -230,6 +237,13 @@ func compileMatcher(l *lang.Language, m *dsl.Matcher) (*compiledMatcher, error) 
 				return nil, err
 			}
 			cm.children = append(cm.children, c)
+		}
+		for _, c := range m.Where {
+			cc, err := compileConstraint(l, c)
+			if err != nil {
+				return nil, err
+			}
+			cm.where = append(cm.where, cc)
 		}
 		return cm, nil
 	case dsl.MatchNot:

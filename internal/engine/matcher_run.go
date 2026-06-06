@@ -29,6 +29,10 @@ func BuildIndex(tree *sitter.Tree) *Index {
 // find produces all candidate matches for a matcher across a tree. Only
 // "positive" matchers (pattern/query/any/all) can generate candidates.
 func (cm *compiledMatcher) find(ctx *matchCtx, root *sitter.Node) []Match {
+	return cm.filterWhere(ctx, cm.findRaw(ctx, root))
+}
+
+func (cm *compiledMatcher) findRaw(ctx *matchCtx, root *sitter.Node) []Match {
 	switch cm.kind {
 	case dsl.MatchPattern:
 		if cm.pattern.isSeq {
@@ -71,6 +75,51 @@ func (cm *compiledMatcher) find(ctx *matchCtx, root *sitter.Node) []Match {
 		return out
 	}
 	return nil
+}
+
+// filterWhere drops matches that fail this matcher's branch-scoped `where`
+// predicates (those declared directly inside an `any { ... }` / `all { ... }`).
+func (cm *compiledMatcher) filterWhere(ctx *matchCtx, matches []Match) []Match {
+	if len(cm.where) == 0 {
+		return matches
+	}
+	out := make([]Match, 0, len(matches))
+	for _, m := range matches {
+		if cm.passesWhereMatch(ctx, m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (cm *compiledMatcher) passesWhereMatch(ctx *matchCtx, m Match) bool {
+	b := m.Bindings
+	if b == nil {
+		b = Bindings{}
+	}
+	bm := b.clone()
+	bindMatch(bm, m, ctx.tsrc)
+	return cm.passesWhereBindings(ctx, bm)
+}
+
+func (cm *compiledMatcher) passesWhereBindings(ctx *matchCtx, b Bindings) bool {
+	for _, c := range cm.where {
+		if !c.eval(ctx, b) {
+			return false
+		}
+	}
+	return true
+}
+
+// passesWhereAt checks branch-scoped `where` predicates for a matcher accepted
+// at a specific node, exposing $match for that node.
+func (cm *compiledMatcher) passesWhereAt(ctx *matchCtx, n *sitter.Node, b Bindings) bool {
+	if len(cm.where) == 0 {
+		return true
+	}
+	bm := b.clone()
+	bindMatch(bm, mkMatch(n, b), ctx.tsrc)
+	return cm.passesWhereBindings(ctx, bm)
 }
 
 func (cm *compiledMatcher) firstPositive() *compiledMatcher {
@@ -186,10 +235,16 @@ func (cm *compiledMatcher) matchesNode(ctx *matchCtx, n *sitter.Node, seed Bindi
 			}
 			b.merge(nb)
 		}
+		if !cm.passesWhereAt(ctx, n, b) {
+			return nil, false
+		}
 		return b, true
 	case dsl.MatchAny:
 		for _, ch := range cm.children {
 			if nb, ok := ch.matchesNode(ctx, n, seed); ok {
+				if !cm.passesWhereAt(ctx, n, nb) {
+					continue
+				}
 				return nb, true
 			}
 		}

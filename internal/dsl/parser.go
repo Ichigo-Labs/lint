@@ -279,6 +279,18 @@ func (p *parser) parseField(r *Rule, acc *ruleAcc, name string) error {
 			return err
 		}
 		r.Tags = append(r.Tags, tags...)
+	case "paths", "path":
+		globs, err := p.parseStringList()
+		if err != nil {
+			return err
+		}
+		r.Paths = append(r.Paths, globs...)
+	case "exclude", "excludePaths":
+		globs, err := p.parseStringList()
+		if err != nil {
+			return err
+		}
+		r.ExcludePaths = append(r.ExcludePaths, globs...)
 	case "pattern":
 		body, err := p.lex.readRawBody()
 		if err != nil {
@@ -454,6 +466,7 @@ func (p *parser) parseCombinator(kw token, name string) (*Matcher, error) {
 		return nil, err
 	}
 	var children []*Matcher
+	var where []Constraint
 	for {
 		t, err := p.peek()
 		if err != nil {
@@ -465,6 +478,17 @@ func (p *parser) parseCombinator(kw token, name string) (*Matcher, error) {
 		}
 		if t.kind == tEOF {
 			return nil, p.lex.errf(kw.pos, "unterminated %s { ... }", name)
+		}
+		// A `where` clause inside the block scopes its constraint to this
+		// branch (applied only to matches this combinator produces).
+		if t.kind == tIdent && t.val == "where" {
+			p.next()
+			c, err := p.parseConstraint()
+			if err != nil {
+				return nil, err
+			}
+			where = append(where, c)
+			continue
 		}
 		m, err := p.parseMatcher()
 		if err != nil {
@@ -479,7 +503,7 @@ func (p *parser) parseCombinator(kw token, name string) (*Matcher, error) {
 	if name == "all" {
 		kind = MatchAll
 	}
-	return &Matcher{Kind: kind, Children: children, Pos: kw.pos}, nil
+	return &Matcher{Kind: kind, Children: children, Where: where, Pos: kw.pos}, nil
 }
 
 // --- constraints ---------------------------------------------------------
@@ -761,6 +785,39 @@ func (p *parser) parseStringValue() (string, error) {
 		return "", p.lex.errf(t.pos, "expected a string, got %s", t)
 	}
 	return t.val, nil
+}
+
+// parseStringList reads a list of string globs, either as a bracket list
+// `["a", "b"]` or a comma-separated sequence `"a", "b"`.
+func (p *parser) parseStringList() ([]string, error) {
+	t, err := p.peek()
+	if err != nil {
+		return nil, err
+	}
+	if t.kind == tLBrack {
+		return p.parseBracketList()
+	}
+	var out []string
+	first, err := p.parseStringValue()
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, first)
+	for {
+		nt, err := p.peek()
+		if err != nil {
+			return nil, err
+		}
+		if nt.kind != tComma {
+			return out, nil
+		}
+		p.next()
+		s, err := p.parseStringValue()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
 }
 
 // parseIdentList reads `a, b, c` of identifiers (commas required between).

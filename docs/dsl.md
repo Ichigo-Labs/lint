@@ -16,6 +16,7 @@ This document is the complete reference. For a task-oriented walkthrough, see
 - [Matcher clauses](#matcher-clauses) — `pattern`, `query`, `any`, `all`, `not`
 - [Relation clauses](#relation-clauses) — `inside`, `has`, `precedes`, `follows`, `directly`, and negations
 - [`where` constraints](#where-constraints) — regex, kind, membership, numeric, `count`, sub-pattern
+- [Path scoping](#path-scoping) — `paths` / `exclude` globs
 - [`fix`](#fix)
 - [`test`](#test)
 - [Severity and exit codes](#severity-and-exit-codes)
@@ -89,6 +90,8 @@ is exactly the pattern `foo()`.
 | `in` | `language`, `languages` | Comma-separated languages this rule applies to, e.g. `in go, typescript`. If omitted, the rule is compiled for **every** language whose grammar can parse its pattern. |
 | `url` | `link` | An optional link to a longer explanation / style-guide entry. Surfaced in `--json`. |
 | `tags` | `tag` | Comma-separated free-form labels, e.g. `tags security, correctness`. Surfaced in `--json` and selectable with `lint check --tag`. |
+| `paths` | `path` | Comma-separated (or bracketed) string globs restricting the rule to matching files, e.g. `paths "src/components/**"`. See [Path scoping](#path-scoping). |
+| `exclude` | `excludePaths` | String globs removing files from the rule even when they match `paths`, e.g. `exclude "**/*.test.ts"`. |
 
 `message` and `note` expand `$NAME` / `$$$NAME` placeholders using the rule's
 captured metavariables. For example, with `pattern { fmt.$M($$$) }`:
@@ -337,6 +340,34 @@ rule call-with-args {
   }
 }
 ```
+
+#### Branch-scoped `where`
+
+A `where` clause written **directly inside** an `any { ... }` or `all { ... }`
+block constrains only the matches that block produces — unlike a rule-level
+`where`, which applies to every candidate. This lets each branch of an `any`
+carry its own predicate by wrapping it in an `all`:
+
+```
+rule on-handler-naming {
+  in typescript
+  any {
+    # arrow / function values: always required to be on*
+    query "(jsx_attribute (property_identifier) @name (jsx_expression [(arrow_function) (function_expression)]))"
+    # identifier values: only flagged when the name looks like a verb
+    all {
+      query "(jsx_attribute (property_identifier) @name (jsx_expression (identifier)))"
+      where $name matches "^(open|close|toggle|set|select)([A-Z]|$)"
+    }
+  }
+  where $name not matches "^on[A-Z]"
+}
+```
+
+Here the verb-prefix predicate applies **only** to the identifier-valued branch;
+the arrow/function branch is unaffected. The trailing rule-level `where` still
+applies to both branches. Branch-scoped predicates may reference that branch's
+captures (e.g. `$name`) and the implicit `$match` span.
 
 ### `not <matcher>`
 
@@ -694,6 +725,36 @@ rule eq-lhs-not-call {
   }
 }
 ```
+
+## Path scoping
+
+By default a rule applies to every file whose language it can parse. The `paths`
+and `exclude` fields restrict that set using file-path globs, evaluated against
+each file's path relative to the working directory:
+
+```
+rule no-console-in-components {
+  in       typescript
+  paths    "src/components/**"
+  exclude  "**/*.test.ts", "**/*.stories.tsx"
+  message  "no console.* in components"
+  pattern  { console.$M($$$) }
+}
+```
+
+Glob syntax:
+
+| Token | Matches |
+| --- | --- |
+| `*` | any run of characters except the path separator `/` |
+| `?` | a single character except `/` |
+| `**` | any run of characters, including `/` (crosses directories) |
+
+`paths` is an allow-list: when present, a file must match at least one glob.
+`exclude` is a deny-list applied afterward, so it wins over `paths`. Both accept
+a comma-separated list or a bracketed list (`paths ["a/**", "b/**"]`). Globs are
+matched against the cwd-relative path; files outside the working directory keep
+their given path and so generally won't match a relative glob.
 
 ## `fix`
 
