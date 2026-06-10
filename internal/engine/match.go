@@ -4,15 +4,17 @@ import (
 	"bytes"
 	"strings"
 
-	sitter "github.com/smacker/go-tree-sitter"
-
 	"github.com/ichigo-labs/lint/internal/lang"
 )
 
 // Binding is the value captured by a metavariable.
+//
+// Node is a flat index into the file's Index; -1 (noNode) means the capture
+// has no single node (variadics, text holes). Note the zero value is index 0
+// — the file root — so constructions must always set Node explicitly.
 type Binding struct {
-	Node     *sitter.Node // captured node (nil for variadic captures)
-	Text     string       // captured source text
+	Node     int32
+	Text     string // captured source text
 	Variadic bool
 	Count    int // number of nodes a variadic captured (0 for single captures)
 }
@@ -37,14 +39,29 @@ func (b Bindings) merge(other Bindings) {
 // matchCtx carries the immutable inputs of a single match attempt, plus the
 // binding undo journal: the matching kernel mutates one Bindings map in place
 // and rolls failed branches back, instead of cloning the map at every
-// pattern/target pair.
+// pattern/target pair. Pattern nodes and target nodes are both flat indices —
+// into ctx.pat's arrays and ctx.ix's arrays respectively.
 type matchCtx struct {
-	pat   *Pattern
-	tsrc  []byte
-	l     *lang.Language
-	index *Index // optional per-file node index (shared across a file's rules)
+	pat  *Pattern
+	tsrc []byte
+	l    *lang.Language
+	ix   *Index
 
 	undo []undoEntry
+
+	// scratch is the candidate-attempt bindings map findSingle/findSeq
+	// reuse: most candidates fail without binding anything, so allocating a
+	// map per candidate would waste ~90% of the maps. Successful matches
+	// clone it; the journal then rolls it back to empty.
+	scratch Bindings
+}
+
+// scratchBindings returns the reusable per-find bindings map.
+func (c *matchCtx) scratchBindings() Bindings {
+	if c.scratch == nil {
+		c.scratch = Bindings{}
+	}
+	return c.scratch
 }
 
 // undoEntry records one binding write so a failed branch can be rolled back.
@@ -76,121 +93,71 @@ func (c *matchCtx) rollback(b Bindings, mark int) {
 	c.undo = c.undo[:mark]
 }
 
-func (c *matchCtx) ttext(n *sitter.Node) string {
-	return string(c.tsrc[n.StartByte():n.EndByte()])
-}
-
-// tkind returns a target node's kind, via the per-file symbol cache when one
-// is available.
-func (c *matchCtx) tkind(n *sitter.Node) string {
-	if c.index != nil {
-		return c.index.kind(n)
-	}
-	return n.Type()
-}
-
-// trel returns a target node's relevant children, memoized per file.
-func (c *matchCtx) trel(n *sitter.Node) []*sitter.Node {
-	if c.index != nil {
-		return c.index.relevant(n, c.l)
-	}
-	return relevantChildren(n, c.l)
-}
-
-// tnamed returns a target node's named children, memoized per file.
-func (c *matchCtx) tnamed(n *sitter.Node) []*sitter.Node {
-	if c.index != nil {
-		return c.index.named(n, c.l)
-	}
-	return namedChildren(n, c.l)
-}
-
-// tUnwrapTransparent is unwrapTransparent for target nodes, using the
-// memoized kind/children lookups.
-func (c *matchCtx) tUnwrapTransparent(n *sitter.Node) *sitter.Node {
-	for isTransparent(c.tkind(n), c.l) {
-		kids := c.tnamed(n)
-		if len(kids) != 1 {
-			return n
-		}
-		n = kids[0]
-	}
-	return n
-}
-
-// pUnwrapTransparent is unwrapTransparent for pattern nodes, using the
-// pattern's precomputed tables.
-func (c *matchCtx) pUnwrapTransparent(n *sitter.Node) *sitter.Node {
-	for isTransparent(c.pat.kind(n), c.pat.lang) {
-		kids := c.pat.named(n)
-		if len(kids) != 1 {
-			return n
-		}
-		n = kids[0]
-	}
-	return n
+// tbytes returns a target node's source bytes (no copy).
+func (c *matchCtx) tbytes(n int32) []byte {
+	return c.tsrc[c.ix.f.StartByte[n]:c.ix.f.EndByte[n]]
 }
 
 // matchNode tests whether pattern node p matches target node t, recording any
 // metavariable bindings into b through the undo journal. On a false return, b
 // is unchanged (every failing branch rolls back its own writes).
-func (c *matchCtx) matchNode(p, t *sitter.Node, b Bindings) bool {
+func (c *matchCtx) matchNode(p, t int32, b Bindings) bool {
 	// Single metavariable: binds any one node (with equality on reuse). The
 	// target is bound through its transparent wrappers, so `$X` captures the
 	// expression rather than the statement (and an attribute value rather
 	// than its quoting wrapper).
-	if spec, ok := c.pat.metaOf(p); ok {
+	if spec, ok := c.pat.metaAt(p); ok {
 		if spec.kind == mvVariadic {
 			return true // a lone variadic in node position matches anything
 		}
 		if spec.anon {
 			return true
 		}
-		tu := c.tUnwrapTransparent(t)
-		txt := c.ttext(tu)
+		tu := c.ix.unwrapTransparentT(t)
+		txt := c.tbytes(tu)
 		if prev, exists := b[spec.name]; exists {
-			return prev.Text == txt
+			return prev.Text == string(txt)
 		}
-		c.bind(b, spec.name, Binding{Node: tu, Text: txt})
+		c.bind(b, spec.name, Binding{Node: tu, Text: string(txt)})
 		return true
 	}
 
-	p = c.pUnwrapTransparent(p)
-	t = c.tUnwrapTransparent(t)
+	p = c.pat.uwTrans[p]
+	t = c.ix.unwrapTransparentT(t)
 
 	// p may have become a metavariable after unwrapping a statement wrapper.
-	if spec, ok := c.pat.metaOf(p); ok && spec.kind == mvSingle {
+	if spec, ok := c.pat.metaAt(p); ok && spec.kind == mvSingle {
 		if spec.anon {
 			return true
 		}
-		txt := c.ttext(t)
+		txt := c.tbytes(t)
 		if prev, exists := b[spec.name]; exists {
-			return prev.Text == txt
+			return prev.Text == string(txt)
 		}
-		c.bind(b, spec.name, Binding{Node: t, Text: txt})
+		c.bind(b, spec.name, Binding{Node: t, Text: string(txt)})
 		return true
 	}
 
-	pKind := c.pat.kind(p)
-	if pKind != c.tkind(t) {
+	pSym := c.pat.csym[p]
+	if pSym != c.ix.csym[t] {
 		return false
 	}
 
 	// A metavariable in a node's text hole (`attr="$X"` in XML): the content
 	// is not a child node, so bind the target's hole text.
-	if spec, ok := c.pat.metaOfInner(p); ok {
-		ts, te, tok := innerSpan(t)
+	if spec, ok := c.pat.innerAt(p); ok {
+		ts, te, tok := c.ix.innerSpan(t)
 		if !tok {
 			return false
 		}
 		if spec.anon {
 			return true
 		}
-		txt := string(c.tsrc[ts:te])
+		txt := c.tsrc[ts:te]
 		if prev, exists := b[spec.name]; exists {
-			return prev.Text == txt
+			return prev.Text == string(txt)
 		}
-		c.bind(b, spec.name, Binding{Text: txt})
+		c.bind(b, spec.name, Binding{Node: noNode, Text: string(txt)})
 		return true
 	}
 
@@ -200,16 +167,16 @@ func (c *matchCtx) matchNode(p, t *sitter.Node, b Bindings) bool {
 	// ignore the content entirely. Interpolated literals (template strings,
 	// f-strings) keep structural matching so the code inside `${…}` compares
 	// like code, not like text.
-	if c.pat.lang.IsLiteral(pKind) && !c.hasInterpolation(p) {
-		return bytes.Equal(c.pat.textBytes(p), c.tsrc[t.StartByte():t.EndByte()])
+	if is(c.pat.syms.literal, pSym) && !c.pat.interp[p] {
+		return bytes.Equal(c.pat.textBytes(p), c.tbytes(t))
 	}
 
-	pk := c.pat.relevant(p)
-	tk := c.trel(t)
+	pk := c.pat.rel(p)
+	tk := c.ix.rel(t)
 	if len(pk) == 0 && len(tk) == 0 {
 		// Leaf tokens of the same kind: identifiers, literals, operators.
-		pb, tb := c.pat.textBytes(p), c.tsrc[t.StartByte():t.EndByte()]
-		if c.l.FoldsCase(pKind) {
+		pb, tb := c.pat.textBytes(p), c.tbytes(t)
+		if is(c.pat.syms.foldCase, pSym) {
 			return strings.EqualFold(string(pb), string(tb))
 		}
 		return bytes.Equal(pb, tb)
@@ -219,64 +186,53 @@ func (c *matchCtx) matchNode(p, t *sitter.Node, b Bindings) bool {
 	// (an XML attribute value, say). When both holes are empty or whitespace
 	// (`()` vs `( )`), the delimiters compare structurally so that
 	// whitespace and comments inside stay irrelevant, as everywhere else.
-	if !hasNamed(pk) && !hasNamed(tk) {
-		if holeHasContent(p, c.pat.src) || holeHasContent(t, c.tsrc) {
-			return bytes.Equal(c.pat.textBytes(p), c.tsrc[t.StartByte():t.EndByte()])
+	if !c.pat.namedRel[p] && !c.hasNamedT(tk) {
+		if c.pat.holeContent[p] || c.holeHasContentT(t) {
+			return bytes.Equal(c.pat.textBytes(p), c.tbytes(t))
 		}
 		return c.matchExact(pk, tk, b)
 	}
 	return c.matchExact(pk, tk, b)
 }
 
-// hasNamed reports whether any node in the list is a named grammar node.
-func hasNamed(nodes []*sitter.Node) bool {
+// hasNamedT reports whether any target node in the list is a named node.
+func (c *matchCtx) hasNamedT(nodes []int32) bool {
 	for _, n := range nodes {
-		if n.IsNamed() {
+		if c.ix.f.IsNamed(int(n)) {
 			return true
 		}
 	}
 	return false
 }
 
-// holeHasContent reports whether a node's inner span (the text between its
-// delimiter tokens) contains non-whitespace bytes.
-func holeHasContent(n *sitter.Node, src []byte) bool {
-	s, e, ok := innerSpan(n)
-	return ok && len(bytes.TrimSpace(src[s:e])) > 0
-}
-
-// hasInterpolation reports whether a pattern literal directly contains
-// interpolated code (`${…}` in a template string, `{…}` in an f-string).
-func (c *matchCtx) hasInterpolation(p *sitter.Node) bool {
-	for _, k := range c.pat.named(p) {
-		if c.pat.lang.IsInterpolation(c.pat.kind(k)) {
-			return true
-		}
-	}
-	return false
+// holeHasContentT reports whether a target node's inner span (the text
+// between its delimiter tokens) contains non-whitespace bytes.
+func (c *matchCtx) holeHasContentT(n int32) bool {
+	s, e, ok := c.ix.innerSpan(n)
+	return ok && len(bytes.TrimSpace(c.tsrc[s:e])) > 0
 }
 
 // matchExact matches pattern nodes against target nodes requiring that every
 // target node is consumed. Unlike matchPrefix it never leaves a tail, so a
 // trailing variadic absorbs all remaining nodes. On a false return, b is
 // unchanged.
-func (c *matchCtx) matchExact(pats, tgts []*sitter.Node, b Bindings) bool {
+func (c *matchCtx) matchExact(pats, tgts []int32, b Bindings) bool {
 	if len(pats) == 0 {
 		return len(tgts) == 0
 	}
 	p := pats[0]
-	pu := c.pat.unwrapForVariadic(p)
-	if spec, ok := c.pat.metaOf(pu); ok && spec.kind == mvVariadic {
+	pu := c.pat.uwVar[p]
+	if spec, ok := c.pat.metaAt(pu); ok && spec.kind == mvVariadic {
 		for k := 0; k <= len(tgts); k++ {
 			mark := c.mark()
 			if !spec.anon {
-				txt := spanText(tgts[:k], c.tsrc)
+				txt := c.spanBytes(tgts[:k])
 				if prev, exists := b[spec.name]; exists {
-					if prev.Text != txt {
+					if prev.Text != string(txt) {
 						continue
 					}
 				} else {
-					c.bind(b, spec.name, Binding{Text: txt, Variadic: true, Count: k})
+					c.bind(b, spec.name, Binding{Node: noNode, Text: string(txt), Variadic: true, Count: k})
 				}
 			}
 			if c.matchExact(pats[1:], tgts[k:], b) {
@@ -300,7 +256,7 @@ func (c *matchCtx) matchExact(pats, tgts []*sitter.Node, b Bindings) bool {
 // matchPrefix matches pattern nodes against a prefix of target nodes, returning
 // how many target nodes were consumed. Variadic pattern nodes absorb a run of
 // target nodes (with backtracking). On a false return, b is unchanged.
-func (c *matchCtx) matchPrefix(pats, tgts []*sitter.Node, b Bindings) (int, bool) {
+func (c *matchCtx) matchPrefix(pats, tgts []int32, b Bindings) (int, bool) {
 	if len(pats) == 0 {
 		return 0, true
 	}
@@ -309,18 +265,18 @@ func (c *matchCtx) matchPrefix(pats, tgts []*sitter.Node, b Bindings) (int, bool
 	// and parameter-wrapper nodes, it is a variadic leaf. A variadic sentinel
 	// buried inside a semantic node (e.g. Go's expression_list) is instead
 	// matched by recursing into that node.
-	pu := c.pat.unwrapForVariadic(p)
-	if spec, ok := c.pat.metaOf(pu); ok && spec.kind == mvVariadic {
+	pu := c.pat.uwVar[p]
+	if spec, ok := c.pat.metaAt(pu); ok && spec.kind == mvVariadic {
 		for k := 0; k <= len(tgts); k++ {
 			mark := c.mark()
 			if !spec.anon {
-				txt := spanText(tgts[:k], c.tsrc)
+				txt := c.spanBytes(tgts[:k])
 				if prev, exists := b[spec.name]; exists {
-					if prev.Text != txt {
+					if prev.Text != string(txt) {
 						continue
 					}
 				} else {
-					c.bind(b, spec.name, Binding{Text: txt, Variadic: true, Count: k})
+					c.bind(b, spec.name, Binding{Node: noNode, Text: string(txt), Variadic: true, Count: k})
 				}
 			}
 			if rest, ok := c.matchPrefix(pats[1:], tgts[k:], b); ok {
@@ -344,12 +300,12 @@ func (c *matchCtx) matchPrefix(pats, tgts []*sitter.Node, b Bindings) (int, bool
 	return 0, false
 }
 
-// spanText returns the source text spanning a run of sibling nodes.
-func spanText(nodes []*sitter.Node, src []byte) string {
+// spanBytes returns the source bytes spanning a run of sibling target nodes.
+func (c *matchCtx) spanBytes(nodes []int32) []byte {
 	if len(nodes) == 0 {
-		return ""
+		return nil
 	}
-	start := nodes[0].StartByte()
-	end := nodes[len(nodes)-1].EndByte()
-	return string(src[start:end])
+	start := c.ix.f.StartByte[nodes[0]]
+	end := c.ix.f.EndByte[nodes[len(nodes)-1]]
+	return c.tsrc[start:end]
 }

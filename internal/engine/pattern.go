@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/ichigo-labs/lint/internal/lang"
+	"github.com/ichigo-labs/lint/internal/treesit"
 )
 
 type metaKind int
@@ -29,62 +31,140 @@ type metaSpec struct {
 	count int
 }
 
-// Pattern is a compiled structural pattern for one language.
+// Pattern is a compiled structural pattern for one language. After compile
+// the matcher works exclusively on the flat form (f and the dense per-node
+// tables below); the smacker nodes are kept only for DebugPattern.
 type Pattern struct {
 	lang    *lang.Language
 	src     []byte              // rewritten pattern source
 	metas   map[string]metaSpec // sentinel identifier -> spec
 	opMetas map[uint32]metaSpec // operator-leaf StartByte -> spec ($OP holes)
-	tree    *sitter.Tree        // kept alive so nodes remain valid
+	tree    *sitter.Tree        // backs sroot/sseq (debug only)
 
-	root  *sitter.Node   // single-node pattern root
-	isSeq bool           // sequence pattern (match a run of sibling statements)
-	seq   []*sitter.Node // sequence elements (named children)
+	syms *langSyms
+	f    *treesit.Flat
+	csym []uint16 // canonical symbol per flat node
+
+	root  int32   // flat index of the single-node pattern root (or seq host)
+	isSeq bool    // sequence pattern (match a run of sibling statements)
+	seq   []int32 // flat indices of the sequence elements
+
+	sroot *sitter.Node // smacker twins of root/seq, for DebugPattern only
+	sseq  []*sitter.Node
 
 	// anchor is the longest concrete token a matching file must contain
 	// byte-for-byte; "" when no such token exists. Used to skip files (and
 	// their parses) that cannot match.
 	anchor string
 
-	// Per-node lookups precomputed once at compile time, keyed by node ID,
-	// so the hot matching path never crosses cgo for pattern-side kinds,
-	// texts, or child lists and never re-allocates a sentinel string for
-	// meta lookups.
-	kindByID  map[uintptr]string
-	textByID  map[uintptr][]byte
-	metaByID  map[uintptr]metaSpec
-	innerByID map[uintptr]metaSpec
-	relByID   map[uintptr][]*sitter.Node
-	namedByID map[uintptr][]*sitter.Node
+	// Dense per-node tables (flat index -> value) precomputed once at
+	// compile time, so the hot matching path is pure array access: no maps,
+	// no cgo, no string hashing.
+	meta        []metaSpec
+	hasMeta     []bool
+	inner       []metaSpec // metavariable in a node's text hole
+	hasInner    []bool
+	uwTrans     []int32 // transparent-unwrap fixpoint per node
+	uwVar       []int32 // unwrapForVariadic fixpoint per node
+	holeContent []bool  // innerSpan exists and holds non-whitespace bytes
+	interp      []bool  // node directly contains an interpolation child
+	namedRel    []bool  // any relevant child is named
+
+	relStart, relList     []int32 // relevant-children CSR
+	namedStart, namedList []int32 // named-children CSR
 }
 
-// precompute fills the per-node lookup tables. Call after prewarm, once the
-// pattern's shape (root/seq) is final.
+// precompute extracts the pattern tree to its flat form and fills the dense
+// per-node tables, once the pattern's shape (sroot/sseq) is final.
 func (p *Pattern) precompute() {
-	p.kindByID = map[uintptr]string{}
-	p.textByID = map[uintptr][]byte{}
-	p.metaByID = map[uintptr]metaSpec{}
-	p.innerByID = map[uintptr]metaSpec{}
-	p.relByID = map[uintptr][]*sitter.Node{}
-	p.namedByID = map[uintptr][]*sitter.Node{}
-	walk(p.tree.RootNode(), func(n *sitter.Node) {
-		id := n.ID()
-		p.kindByID[id] = n.Type()
-		p.textByID[id] = p.src[n.StartByte():n.EndByte()]
-		p.relByID[id] = relevantChildren(n, p.lang)
-		p.namedByID[id] = namedChildren(n, p.lang)
-		if n.ChildCount() == 0 {
-			if s, ok := p.metas[n.Content(p.src)]; ok {
-				p.metaByID[id] = s
-			} else if s, ok := p.opMetas[n.StartByte()]; ok {
-				p.metaByID[id] = s
+	p.syms = symsFor(p.lang)
+	p.f = treesit.ExtractTree(p.tree)
+	f, st := p.f, p.syms
+	n := f.Len()
+
+	p.csym = make([]uint16, n)
+	for i := 0; i < n; i++ {
+		p.csym[i] = treesit.Canonical(st.canon, f.Symbol[i])
+	}
+	p.relStart, p.relList, p.namedStart, p.namedList = buildChildCSR(f, st, p.csym)
+
+	// Resolve the smacker root/seq nodes into flat indices by ts_node id.
+	byID := make(map[uintptr]int32, n)
+	for i, id := range f.NodeID {
+		byID[id] = int32(i)
+	}
+	if p.sroot != nil {
+		p.root = byID[p.sroot.ID()]
+	}
+	for _, sn := range p.sseq {
+		p.seq = append(p.seq, byID[sn.ID()])
+	}
+
+	p.meta = make([]metaSpec, n)
+	p.hasMeta = make([]bool, n)
+	p.inner = make([]metaSpec, n)
+	p.hasInner = make([]bool, n)
+	p.holeContent = make([]bool, n)
+	p.interp = make([]bool, n)
+	p.namedRel = make([]bool, n)
+	for i := 0; i < n; i++ {
+		if len(f.Children(i)) == 0 {
+			if s, ok := p.metas[string(p.src[f.StartByte[i]:f.EndByte[i]])]; ok {
+				p.meta[i], p.hasMeta[i] = s, true
+			} else if s, ok := p.opMetas[f.StartByte[i]]; ok {
+				p.meta[i], p.hasMeta[i] = s, true
 			}
-		} else if s, e, ok := innerSpan(n); ok && s != e {
-			if spec, found := p.metas[string(p.src[s:e])]; found {
-				p.innerByID[id] = spec
+		} else if s, e, ok := flatInnerSpan(f, int32(i)); ok {
+			if s != e {
+				if spec, found := p.metas[string(p.src[s:e])]; found {
+					p.inner[i], p.hasInner[i] = spec, true
+				}
+			}
+			p.holeContent[i] = len(bytes.TrimSpace(p.src[s:e])) > 0
+		}
+		for _, k := range p.named(int32(i)) {
+			if is(st.interp, p.csym[k]) {
+				p.interp[i] = true
+				break
 			}
 		}
-	})
+		for _, k := range p.rel(int32(i)) {
+			if f.IsNamed(int(k)) {
+				p.namedRel[i] = true
+				break
+			}
+		}
+	}
+
+	// Unwrap fixpoints: both unwraps descend into a node's single named
+	// child, which always carries a larger pre-order index, so a reverse
+	// pass sees every child's fixpoint before its parent needs it.
+	p.uwTrans = make([]int32, n)
+	p.uwVar = make([]int32, n)
+	attrSym, attrOK := st.canonForKind("Attribute")
+	for i := n - 1; i >= 0; i-- {
+		ni := int32(i)
+		p.uwTrans[i] = ni
+		if is(st.transparent, p.csym[i]) {
+			if kids := p.named(ni); len(kids) == 1 {
+				p.uwTrans[i] = p.uwTrans[kids[0]]
+			}
+		}
+		p.uwVar[i] = ni
+		if is(st.transparent, p.csym[i]) || is(st.paramWrapper, p.csym[i]) {
+			kids := p.named(ni)
+			switch {
+			case len(kids) == 1:
+				p.uwVar[i] = p.uwVar[kids[0]]
+			case len(kids) > 1 && attrOK && p.csym[i] == attrSym:
+				// XML's grammar cannot parse a bare attribute name, so a
+				// variadic in attribute position is rewritten to `$$$X=""`
+				// and parses as Attribute(Name, AttValue); the Name child
+				// carries the sentinel.
+				p.uwVar[i] = kids[0]
+			}
+		}
+	}
 }
 
 // opInsertion records where a $OP operator placeholder was emitted in the
@@ -366,9 +446,6 @@ func compilePattern(l *lang.Language, raw string) (*Pattern, error) {
 		if hasParseError(root, l) {
 			continue
 		}
-		// Populate smacker's lazy node cache single-threaded so concurrent
-		// matching against this shared pattern tree never writes the cache.
-		prewarm(root)
 		bs := uint32(len(sc.prefix))
 		be := uint32(len(sc.prefix) + len(rewritten))
 		nodes := topNodesInRange(root, bs, be, l)
@@ -414,14 +491,14 @@ func compilePattern(l *lang.Language, raw string) (*Pattern, error) {
 			}
 			if wrapperKinds[core.Type()] && core.NamedChildCount() > 1 {
 				p.isSeq = true
-				p.root = core
-				p.seq = namedChildren(core, l)
+				p.sroot = core
+				p.sseq = namedChildren(core, l)
 			} else {
-				p.root = core
+				p.sroot = core
 			}
 			// A pattern that is nothing but a single metavariable matches
 			// everything; reject it to avoid runaway findings.
-			if _, isMeta := p.metaOf(p.root); isMeta && !p.isSeq {
+			if _, isMeta := p.nodeMeta(p.sroot); isMeta && !p.isSeq {
 				return nil, fmt.Errorf("pattern %q is a bare metavariable and would match every node", raw)
 			}
 			p.anchor = p.computeAnchor(l)
@@ -429,8 +506,8 @@ func compilePattern(l *lang.Language, raw string) (*Pattern, error) {
 			return p, nil
 		}
 		p.isSeq = true
-		p.seq = nodes
-		p.root = nodes[0].Parent()
+		p.sseq = nodes
+		p.sroot = nodes[0].Parent()
 		p.anchor = p.computeAnchor(l)
 		p.precompute()
 		return p, nil
@@ -450,9 +527,9 @@ func (p *Pattern) computeAnchor(l *lang.Language) string {
 	if l.HasCaseFolding() {
 		return ""
 	}
-	roots := p.seq
+	roots := p.sseq
 	if !p.isSeq {
-		roots = []*sitter.Node{p.root}
+		roots = []*sitter.Node{p.sroot}
 	}
 	best := ""
 	consider := func(txt string) {
@@ -470,7 +547,7 @@ func (p *Pattern) computeAnchor(l *lang.Language) string {
 			return
 		}
 		if n.ChildCount() == 0 {
-			if _, isMeta := p.metaOf(n); isMeta {
+			if _, isMeta := p.nodeMeta(n); isMeta {
 				return
 			}
 			consider(p.text(n))
@@ -479,7 +556,7 @@ func (p *Pattern) computeAnchor(l *lang.Language) string {
 		// Full-text-compared literal without a metavariable hole or
 		// interpolation: its entire text appears verbatim in any match.
 		if l.IsLiteral(n.Type()) {
-			if _, ok := p.metaOfInner(n); !ok {
+			if _, ok := p.nodeMetaInner(n); !ok {
 				hasInterp := false
 				for _, k := range namedChildren(n, l) {
 					if l.IsInterpolation(k.Type()) {
@@ -661,24 +738,22 @@ func DebugPattern(l *lang.Language, raw string) (string, error) {
 	}
 	if p.isSeq {
 		var b strings.Builder
-		fmt.Fprintf(&b, "sequence of %d nodes:\n", len(p.seq))
-		for _, n := range p.seq {
+		fmt.Fprintf(&b, "sequence of %d nodes:\n", len(p.sseq))
+		for _, n := range p.sseq {
 			fmt.Fprintf(&b, "  %s\n", n.String())
 		}
 		return b.String(), nil
 	}
-	return fmt.Sprintf("kind: %s\n%s", p.root.Type(), p.root.String()), nil
+	return fmt.Sprintf("kind: %s\n%s", p.sroot.Type(), p.sroot.String()), nil
 }
 
-// metaOf reports the metavariable spec for a pattern node, if the node IS a
-// sentinel leaf. It deliberately ignores larger nodes whose text merely equals
-// a sentinel (e.g. a grammar wrapper holding only the sentinel), so matching
-// recurses into the wrapper and binds the tightest node.
-func (p *Pattern) metaOf(n *sitter.Node) (metaSpec, bool) {
-	if p.metaByID != nil {
-		s, ok := p.metaByID[n.ID()]
-		return s, ok
-	}
+// nodeMeta is the compile-time (smacker-side) metavariable lookup, used by
+// compilePattern and computeAnchor before the flat tables exist. It reports
+// the spec only when the node IS a sentinel leaf, deliberately ignoring
+// larger nodes whose text merely equals a sentinel (a grammar wrapper
+// holding only the sentinel), so matching recurses into the wrapper and
+// binds the tightest node.
+func (p *Pattern) nodeMeta(n *sitter.Node) (metaSpec, bool) {
 	if n.ChildCount() != 0 {
 		return metaSpec{}, false
 	}
@@ -691,16 +766,12 @@ func (p *Pattern) metaOf(n *sitter.Node) (metaSpec, bool) {
 	return metaSpec{}, false
 }
 
-// metaOfInner reports the metavariable spec carried in a node's text hole
-// (see innerSpan), for sentinels that parse between delimiter tokens rather
-// than as nodes of their own: `attr="$X"` in XML puts the sentinel inside
-// AttValue's quotes, which the grammar exposes only as part of the parent's
-// span.
-func (p *Pattern) metaOfInner(n *sitter.Node) (metaSpec, bool) {
-	if p.innerByID != nil {
-		s, ok := p.innerByID[n.ID()]
-		return s, ok
-	}
+// nodeMetaInner is the compile-time twin of innerAt: the metavariable spec
+// carried in a node's text hole (see innerSpan), for sentinels that parse
+// between delimiter tokens rather than as nodes of their own: `attr="$X"`
+// in XML puts the sentinel inside AttValue's quotes, which the grammar
+// exposes only as part of the parent's span.
+func (p *Pattern) nodeMetaInner(n *sitter.Node) (metaSpec, bool) {
 	s, e, ok := innerSpan(n)
 	if !ok || s == e {
 		return metaSpec{}, false
@@ -709,58 +780,32 @@ func (p *Pattern) metaOfInner(n *sitter.Node) (metaSpec, bool) {
 	return spec, found
 }
 
-// kind returns a pattern node's type without crossing cgo on the hot path.
-func (p *Pattern) kind(n *sitter.Node) string {
-	if k, ok := p.kindByID[n.ID()]; ok {
-		return k
+// metaAt reports the metavariable spec for a pattern node.
+func (p *Pattern) metaAt(i int32) (metaSpec, bool) {
+	if p.hasMeta[i] {
+		return p.meta[i], true
 	}
-	return n.Type()
+	return metaSpec{}, false
+}
+
+// innerAt reports the metavariable spec carried in a pattern node's text hole.
+func (p *Pattern) innerAt(i int32) (metaSpec, bool) {
+	if p.hasInner[i] {
+		return p.inner[i], true
+	}
+	return metaSpec{}, false
 }
 
 // textBytes returns a pattern node's source bytes without allocating.
-func (p *Pattern) textBytes(n *sitter.Node) []byte {
-	if t, ok := p.textByID[n.ID()]; ok {
-		return t
-	}
-	return p.src[n.StartByte():n.EndByte()]
+func (p *Pattern) textBytes(i int32) []byte {
+	return p.src[p.f.StartByte[i]:p.f.EndByte[i]]
 }
 
-// relevant returns a pattern node's relevant children from the precomputed
-// table (falling back to a live computation for safety).
-func (p *Pattern) relevant(n *sitter.Node) []*sitter.Node {
-	if kids, ok := p.relByID[n.ID()]; ok {
-		return kids
-	}
-	return relevantChildren(n, p.lang)
-}
+// rel returns a pattern node's relevant children.
+func (p *Pattern) rel(i int32) []int32 { return p.relList[p.relStart[i]:p.relStart[i+1]] }
 
-// named returns a pattern node's named children from the precomputed table.
-func (p *Pattern) named(n *sitter.Node) []*sitter.Node {
-	if kids, ok := p.namedByID[n.ID()]; ok {
-		return kids
-	}
-	return namedChildren(n, p.lang)
-}
+// named returns a pattern node's named children minus comments/extras.
+func (p *Pattern) named(i int32) []int32 { return p.namedList[p.namedStart[i]:p.namedStart[i+1]] }
 
-// unwrapForVariadic descends through transparent and parameter-wrapper
-// pattern nodes so a buried variadic sentinel is recognised at a list level,
-// using only precomputed lookups.
-func (p *Pattern) unwrapForVariadic(n *sitter.Node) *sitter.Node {
-	for isTransparent(p.kind(n), p.lang) || paramWrapperKinds[p.kind(n)] {
-		kids := p.named(n)
-		if len(kids) != 1 {
-			// XML's grammar cannot parse a bare attribute name, so a variadic
-			// in attribute position is rewritten to `$$$X=""` and parses as
-			// Attribute(Name, AttValue); the Name child carries the sentinel.
-			if p.kind(n) == "Attribute" && len(kids) > 1 {
-				return kids[0]
-			}
-			return n
-		}
-		n = kids[0]
-	}
-	return n
-}
-
-// text returns a pattern node's source text.
+// text returns a pattern node's source text (compile-time helper).
 func (p *Pattern) text(n *sitter.Node) string { return n.Content(p.src) }

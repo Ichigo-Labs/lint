@@ -16,8 +16,10 @@ import (
 )
 
 // Match is a single structural hit: a span of source plus captured bindings.
+// Node is a flat index into the file's Index (noNode when the match has no
+// single node, e.g. a statement sequence's span).
 type Match struct {
-	Node                 *sitter.Node
+	Node                 int32
 	StartByte, EndByte   uint32
 	StartPoint, EndPoint sitter.Point
 	Bindings             Bindings
@@ -110,6 +112,11 @@ type compiledConstraint struct {
 	matcher *compiledMatcher
 	num     float64              // parsed threshold for numeric/count constraints
 	sub     []compiledConstraint // child constraints (for Any/All groups)
+
+	// kindSym is the canonical symbol for a kind/not-kind constraint's kind
+	// name; kindOK is false when no node of the language can have that kind.
+	kindSym uint16
+	kindOK  bool
 }
 
 type compiledRelation struct {
@@ -318,6 +325,8 @@ func compileMatcher(l *lang.Language, m *dsl.Matcher) (*compiledMatcher, error) 
 func compileConstraint(l *lang.Language, c dsl.Constraint) (compiledConstraint, error) {
 	cc := compiledConstraint{kind: c.Kind, varName: c.Var, text: c.Text, other: c.Other}
 	switch c.Kind {
+	case dsl.ConKind, dsl.ConNotKind:
+		cc.kindSym, cc.kindOK = symsFor(l).canonForKind(c.Text)
 	case dsl.ConRegex, dsl.ConNotRegex:
 		re, err := regexp.Compile(c.Text)
 		if err != nil {
@@ -373,20 +382,23 @@ func ParseSource(l *lang.Language, src []byte) (*sitter.Tree, error) {
 // a one-off node index; callers checking many rules against the same tree should
 // share one via RunIndexed.
 func (r *CompiledRule) Run(l *lang.Language, tree *sitter.Tree, src []byte) []Finding {
-	return r.RunIndexed(l, tree, src, BuildIndex(tree))
+	return r.RunIndexed(l, tree, src, BuildIndex(l, tree))
 }
 
 // RunIndexed is Run with a caller-supplied per-file node index, so a tree is
-// walked once for a whole ruleset instead of once per rule.
+// extracted once for a whole ruleset instead of once per rule. A nil idx is
+// accepted (and built here) to keep the historical contract.
 func (r *CompiledRule) RunIndexed(l *lang.Language, tree *sitter.Tree, src []byte, idx *Index) []Finding {
 	lr, ok := r.byLang[l.Name]
 	if !ok {
 		return nil
 	}
-	ctx := &matchCtx{l: l, tsrc: src, index: idx}
-	root := tree.RootNode()
+	if idx == nil {
+		idx = BuildIndex(l, tree)
+	}
+	ctx := &matchCtx{l: l, tsrc: src, ix: idx}
 
-	candidates := lr.root.find(ctx, root)
+	candidates := lr.root.find(ctx, 0)
 
 	var findings []Finding
 	var seen map[[2]uint32]bool
@@ -395,7 +407,7 @@ func (r *CompiledRule) RunIndexed(l *lang.Language, tree *sitter.Tree, src []byt
 		if b == nil {
 			b = Bindings{}
 		}
-		bindMatch(b, m, src)
+		bindMatch(idx, b, m, src)
 		if !lr.passesRelations(ctx, m, b) {
 			continue
 		}
@@ -428,12 +440,12 @@ func (r *CompiledRule) RunIndexed(l *lang.Language, tree *sitter.Tree, src []byt
 // node is recorded only when the span is exactly one node, so `where $match kind`
 // / `is` behave sensibly (a statement-sequence or query-cover span has no single
 // node, like a variadic).
-func bindMatch(b Bindings, m Match, src []byte) {
+func bindMatch(ix *Index, b Bindings, m Match, src []byte) {
 	if _, ok := b["match"]; ok {
 		return
 	}
-	bv := Binding{Text: string(src[m.StartByte:m.EndByte])}
-	if m.Node != nil && m.Node.StartByte() == m.StartByte && m.Node.EndByte() == m.EndByte {
+	bv := Binding{Node: noNode, Text: string(src[m.StartByte:m.EndByte])}
+	if m.Node != noNode && ix.f.StartByte[m.Node] == m.StartByte && ix.f.EndByte[m.Node] == m.EndByte {
 		bv.Node = m.Node
 	}
 	b["match"] = bv
@@ -549,13 +561,19 @@ func (lr *langRule) passesRelations(ctx *matchCtx, m Match, b Bindings) bool {
 // parent is a block and compares that ancestor's siblings there. This looks
 // through statement wrappers (a call inside an expression_statement reaches its
 // block) without spilling into outer blocks.
-func matchSibling(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindings, before bool) (bool, Bindings) {
-	stmt, block := enclosingStatement(n)
-	if block == nil {
+func matchSibling(ctx *matchCtx, cm *compiledMatcher, n int32, seed Bindings, before bool) (bool, Bindings) {
+	stmt, block := enclosingStatement(ctx.ix, n)
+	if block == noNode {
 		return false, nil
 	}
-	sibs := ctx.trel(block)
-	idx := indexOfNode(sibs, stmt)
+	sibs := ctx.ix.rel(block)
+	idx := -1
+	for i, s := range sibs {
+		if s == stmt {
+			idx = i
+			break
+		}
+	}
 	if idx < 0 {
 		return false, nil
 	}
@@ -576,36 +594,26 @@ func matchSibling(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindi
 }
 
 // enclosingStatement returns the candidate's statement node (the ancestor that
-// sits directly inside a block) and that block. Returns nil if the candidate has
-// no enclosing block.
-func enclosingStatement(n *sitter.Node) (stmt, block *sitter.Node) {
-	for a := n; a != nil; a = a.Parent() {
-		p := a.Parent()
-		if p == nil {
-			return nil, nil
+// sits directly inside a block) and that block. Returns noNode if the candidate
+// has no enclosing block.
+func enclosingStatement(ix *Index, n int32) (stmt, block int32) {
+	for a := n; a != noNode; {
+		p := ix.f.Parent[a]
+		if p == noNode {
+			return noNode, noNode
 		}
-		if blockKinds[p.Type()] {
+		if is(ix.st.block, ix.csym[p]) {
 			return a, p
 		}
+		a = p
 	}
-	return nil, nil
-}
-
-// indexOfNode finds target in nodes by span and kind (pointer identity is not
-// guaranteed across tree-sitter node lookups).
-func indexOfNode(nodes []*sitter.Node, target *sitter.Node) int {
-	for i, n := range nodes {
-		if n.StartByte() == target.StartByte() && n.EndByte() == target.EndByte() && n.Type() == target.Type() {
-			return i
-		}
-	}
-	return -1
+	return noNode, noNode
 }
 
 // matchDirectParent tests the candidate's immediate parent against the matcher.
-func matchDirectParent(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindings) (bool, Bindings) {
-	parent := n.Parent()
-	if parent == nil {
+func matchDirectParent(ctx *matchCtx, cm *compiledMatcher, n int32, seed Bindings) (bool, Bindings) {
+	parent := ctx.ix.f.Parent[n]
+	if parent == noNode {
 		return false, nil
 	}
 	nb, ok := cm.matchesNode(ctx, parent, seed)
@@ -614,8 +622,8 @@ func matchDirectParent(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed 
 
 // matchDirectChild tests the candidate's immediate (relevant) children against
 // the matcher — a depth-1 version of matchDescendant.
-func matchDirectChild(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindings) (bool, Bindings) {
-	for _, c := range ctx.trel(n) {
+func matchDirectChild(ctx *matchCtx, cm *compiledMatcher, n int32, seed Bindings) (bool, Bindings) {
+	for _, c := range ctx.ix.rel(n) {
 		if nb, ok := cm.matchesNode(ctx, c, seed); ok {
 			return true, nb
 		}
@@ -625,11 +633,11 @@ func matchDirectChild(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed B
 
 // matchAncestor walks up from n (exclusive) looking for an ancestor the matcher
 // accepts, seeded with the current bindings for cross-pattern back-references.
-func matchAncestor(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindings) (bool, Bindings) {
-	if n == nil {
+func matchAncestor(ctx *matchCtx, cm *compiledMatcher, n int32, seed Bindings) (bool, Bindings) {
+	if n == noNode {
 		return false, nil
 	}
-	for a := n.Parent(); a != nil; a = a.Parent() {
+	for a := ctx.ix.f.Parent[n]; a != noNode; a = ctx.ix.f.Parent[a] {
 		if nb, ok := cm.matchesNode(ctx, a, seed); ok {
 			return true, nb
 		}
@@ -638,29 +646,18 @@ func matchAncestor(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bind
 }
 
 // matchDescendant searches the subtree of n (excluding n) for a node the
-// matcher accepts.
-func matchDescendant(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindings) (bool, Bindings) {
-	if n == nil {
+// matcher accepts. Pre-order layout makes the subtree the contiguous index
+// range (n, SubtreeEnd[n]).
+func matchDescendant(ctx *matchCtx, cm *compiledMatcher, n int32, seed Bindings) (bool, Bindings) {
+	if n == noNode {
 		return false, nil
 	}
-	var found bool
-	var bindings Bindings
-	count := int(n.ChildCount())
-	for i := 0; i < count && !found; i++ {
-		c := n.Child(i)
-		if c == nil {
-			continue
+	for d := n + 1; d < ctx.ix.f.SubtreeEnd[n]; d++ {
+		if nb, ok := cm.matchesNode(ctx, d, seed); ok {
+			return true, nb
 		}
-		walk(c, func(d *sitter.Node) {
-			if found {
-				return
-			}
-			if nb, ok := cm.matchesNode(ctx, d, seed); ok {
-				found, bindings = true, nb
-			}
-		})
 	}
-	return found, bindings
+	return false, nil
 }
 
 func (c compiledConstraint) eval(ctx *matchCtx, b Bindings) bool {
@@ -692,9 +689,9 @@ func (c compiledConstraint) eval(ctx *matchCtx, b Bindings) bool {
 	case dsl.ConNotRegex:
 		return !c.re.MatchString(bv.Text)
 	case dsl.ConKind:
-		return bv.Node != nil && bv.Node.Type() == c.text
+		return bv.Node != noNode && c.kindOK && ctx.ix.csym[bv.Node] == c.kindSym
 	case dsl.ConNotKind:
-		return bv.Node == nil || bv.Node.Type() != c.text
+		return bv.Node == noNode || !c.kindOK || ctx.ix.csym[bv.Node] != c.kindSym
 	case dsl.ConIn:
 		return c.set[bv.Text]
 	case dsl.ConNotIn:
@@ -712,13 +709,13 @@ func (c compiledConstraint) eval(ctx *matchCtx, b Bindings) bool {
 	case dsl.ConNeqText:
 		return bv.Text != c.text
 	case dsl.ConPattern:
-		if bv.Node == nil {
+		if bv.Node == noNode {
 			return false
 		}
 		_, ok := matchNodeOrDescendant(ctx, c.matcher, bv.Node, b)
 		return ok
 	case dsl.ConNotPattern:
-		if bv.Node == nil {
+		if bv.Node == noNode {
 			return true
 		}
 		_, ok := matchNodeOrDescendant(ctx, c.matcher, bv.Node, b)
@@ -760,19 +757,14 @@ func cmpNum(kind dsl.ConstraintKind, a, b float64) bool {
 }
 
 // matchNodeOrDescendant checks whether the matcher accepts n or any node in its
-// subtree.
-func matchNodeOrDescendant(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindings) (Bindings, bool) {
-	var res Bindings
-	var ok bool
-	walk(n, func(d *sitter.Node) {
-		if ok {
-			return
-		}
+// subtree (the contiguous pre-order range [n, SubtreeEnd[n])).
+func matchNodeOrDescendant(ctx *matchCtx, cm *compiledMatcher, n int32, seed Bindings) (Bindings, bool) {
+	for d := n; d < ctx.ix.f.SubtreeEnd[n]; d++ {
 		if nb, matched := cm.matchesNode(ctx, d, seed); matched {
-			res, ok = nb, true
+			return nb, true
 		}
-	})
-	return res, ok
+	}
+	return nil, false
 }
 
 // expandTemplate substitutes $NAME / $$$NAME occurrences with binding text.

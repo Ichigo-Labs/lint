@@ -166,28 +166,6 @@ func unwrapTransparent(n *sitter.Node, l *lang.Language) *sitter.Node {
 	return n
 }
 
-// prewarm forces smacker's lazy per-tree node cache to be fully populated
-// single-threaded. smacker's Tree.cache is an unsynchronized map written on
-// cache miss by Child/NamedChild/Parent; without prewarming, concurrent
-// matching against a shared pattern tree would write that map concurrently and
-// panic. After prewarming, concurrent matching only reads the cache, which is
-// safe. Call this once per pattern tree at compile time.
-func prewarm(n *sitter.Node) {
-	count := int(n.ChildCount())
-	for i := 0; i < count; i++ {
-		c := n.Child(i)
-		if c == nil {
-			continue
-		}
-		_ = c.Parent()
-		prewarm(c)
-	}
-	named := int(n.NamedChildCount())
-	for i := 0; i < named; i++ {
-		_ = n.NamedChild(i)
-	}
-}
-
 // startTagKinds are the open-tag nodes an open-tag pattern compiles to, and
 // elementKinds the element wrappers that own them. Relation matching uses the
 // pair so `inside { <form $$$> }` accepts the form element (the ancestor)

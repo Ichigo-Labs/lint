@@ -8,9 +8,10 @@ import (
 )
 
 // TestConcurrentCheckNoRace exercises many files against shared compiled rules
-// (shared pattern trees) under high concurrency. Run with -race. It guards the
-// pattern-tree prewarm that prevents concurrent writes to smacker's lazy node
-// cache.
+// (shared pattern flat tables and langSyms predicate tables) under high
+// concurrency. Run with -race: every worker reads the same compiled-rule data
+// while building per-file indexes, so this guards the read-only-after-compile
+// invariant those shared tables rely on.
 func TestConcurrentCheckNoRace(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, ".lint"), 0o755)

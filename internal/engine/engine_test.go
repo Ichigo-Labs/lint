@@ -213,8 +213,9 @@ func f() {
 }
 
 func TestIndexedMatchesWalk(t *testing.T) {
-	// The shared-index path must produce byte-identical findings to the full-walk
-	// fallback for single patterns, operator patterns, and statement sequences.
+	// The byType-bucket candidate scan must produce byte-identical findings
+	// to a linear scan over every node (the same pre-order), for single
+	// patterns, operator patterns, and statement sequences.
 	code := `
 package p
 func f(a, b int) {
@@ -249,8 +250,10 @@ func f(a, b int) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		withIdx := cr.RunIndexed(l, tree, []byte(code), BuildIndex(tree))
-		noIdx := cr.RunIndexed(l, tree, []byte(code), nil) // nil index -> walk fallback
+		withIdx := cr.RunIndexed(l, tree, []byte(code), BuildIndex(l, tree))
+		linear := BuildIndex(l, tree)
+		linear.linearScan = true // full-scan path instead of byType buckets
+		noIdx := cr.RunIndexed(l, tree, []byte(code), linear)
 		if !sameSpans(withIdx, noIdx) {
 			t.Errorf("indexed vs walk differ for %q:\n indexed=%v\n walk=%v", src, snippets(withIdx), snippets(noIdx))
 		}

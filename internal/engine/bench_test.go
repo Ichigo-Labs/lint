@@ -89,34 +89,17 @@ func BenchmarkParseSource(b *testing.B) {
 	}
 }
 
-func BenchmarkBuildIndexCold(b *testing.B) {
-	l, _ := lang.Get("go")
-	src := benchSource(200)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-		tree, err := ParseSource(l, src)
-		if err != nil {
-			b.Fatal(err)
-		}
-		b.StartTimer()
-		BuildIndex(tree)
-	}
-}
-
-func BenchmarkBuildIndexWarm(b *testing.B) {
+func BenchmarkBuildIndex(b *testing.B) {
 	l, _ := lang.Get("go")
 	src := benchSource(200)
 	tree, err := ParseSource(l, src)
 	if err != nil {
 		b.Fatal(err)
 	}
-	BuildIndex(tree) // populate the node cache
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		BuildIndex(tree)
+		BuildIndex(l, tree)
 	}
 }
 
@@ -127,7 +110,7 @@ func BenchmarkRunIndexed(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	idx := BuildIndex(tree)
+	idx := BuildIndex(l, tree)
 	crs := compileBenchRules(b)
 	// Sanity: the matching rules must actually fire.
 	if n := len(crs[0].RunIndexed(l, tree, src, idx)); n == 0 {

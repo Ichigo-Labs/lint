@@ -90,14 +90,19 @@ func Pretty(w io.Writer, findings []engine.Finding, sources map[string][]byte, s
 			return fs[i].StartCol < fs[j].StartCol
 		})
 		fmt.Fprintln(w, style.c(bold, file))
-		src := sources[file]
+		// Split the file once for all of its findings; per-finding splitting
+		// is O(findings × filesize) on finding-dense files.
+		var lines []string
+		if src := sources[file]; src != nil {
+			lines = splitLines(src)
+		}
 		for _, f := range fs {
 			loc := fmt.Sprintf("%d:%d", f.StartLine, f.StartCol)
 			sev := style.c(sevColor(f.Severity), string(f.Severity))
 			rule := style.c(gray, "["+f.RuleID+"]")
 			fmt.Fprintf(w, "  %s  %s %s %s\n",
 				style.c(dim, loc), sev, f.Message, rule)
-			writeExcerpt(w, src, f, style)
+			writeExcerpt(w, lines, f, style)
 			if f.Note != "" {
 				fmt.Fprintf(w, "      %s %s\n", style.c(gray, "note:"), f.Note)
 			}
@@ -109,11 +114,7 @@ func Pretty(w io.Writer, findings []engine.Finding, sources map[string][]byte, s
 
 // writeExcerpt prints the matched line(s) with a caret underline under the
 // matched span on its first line.
-func writeExcerpt(w io.Writer, src []byte, f engine.Finding, style Style) {
-	if src == nil {
-		return
-	}
-	lines := splitLines(src)
+func writeExcerpt(w io.Writer, lines []string, f engine.Finding, style Style) {
 	if f.StartLine < 1 || f.StartLine > len(lines) {
 		return
 	}

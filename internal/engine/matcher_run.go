@@ -4,115 +4,22 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/ichigo-labs/lint/internal/dsl"
-	"github.com/ichigo-labs/lint/internal/lang"
 )
-
-// Index is a per-file, pre-order node index shared across all rules checking
-// one parsed tree. Building it once (one walk) lets every single-pattern rule
-// scan only the nodes of its root kind instead of re-walking the whole tree.
-// It also memoizes per-node lookups (kind names, child lists) that every rule
-// would otherwise recompute through cgo. An Index is confined to the single
-// goroutine checking its file; none of this is locked.
-type Index struct {
-	byType map[string][]*sitter.Node // node kind -> nodes, in pre-order
-	all    []*sitter.Node            // every node, in pre-order
-
-	kindBySym map[sitter.Symbol]string   // symbol -> resolved kind name
-	relMemo   map[uintptr][]*sitter.Node // relevantChildren by node ID
-	namedMemo map[uintptr][]*sitter.Node // namedChildren by node ID
-}
-
-// BuildIndex walks a parsed tree once and records its nodes by kind. The
-// pre-order traversal exactly matches walk(), so iterating the index is
-// equivalent to (but cheaper than) re-walking and filtering per rule.
-func BuildIndex(tree *sitter.Tree) *Index {
-	idx := &Index{
-		byType:    map[string][]*sitter.Node{},
-		kindBySym: map[sitter.Symbol]string{},
-		relMemo:   map[uintptr][]*sitter.Node{},
-		namedMemo: map[uintptr][]*sitter.Node{},
-	}
-	walk(tree.RootNode(), func(n *sitter.Node) {
-		k := idx.kind(n)
-		idx.byType[k] = append(idx.byType[k], n)
-		idx.all = append(idx.all, n)
-	})
-	return idx
-}
-
-// kind returns a node's type name, allocating the string only once per
-// distinct grammar symbol. ts_node_type is itself symbol-name resolution on
-// the C side, so caching by symbol is exact.
-func (idx *Index) kind(n *sitter.Node) string {
-	sym := n.Symbol()
-	if k, ok := idx.kindBySym[sym]; ok {
-		return k
-	}
-	k := n.Type()
-	idx.kindBySym[sym] = k
-	return k
-}
-
-// relevant memoizes relevantChildren per node across all of a file's rules,
-// resolving child kinds through the symbol cache so even the first
-// computation allocates no kind strings.
-func (idx *Index) relevant(n *sitter.Node, l *lang.Language) []*sitter.Node {
-	id := n.ID()
-	if kids, ok := idx.relMemo[id]; ok {
-		return kids
-	}
-	count := int(n.ChildCount())
-	out := make([]*sitter.Node, 0, count)
-	for i := 0; i < count; i++ {
-		c := n.Child(i)
-		if c == nil || c.IsExtra() || c.IsMissing() {
-			continue
-		}
-		k := idx.kind(c)
-		if l.IsComment(k) || terminatorKinds[k] {
-			continue
-		}
-		out = append(out, c)
-	}
-	idx.relMemo[id] = out
-	return out
-}
-
-// named memoizes namedChildren per node across all of a file's rules.
-func (idx *Index) named(n *sitter.Node, l *lang.Language) []*sitter.Node {
-	id := n.ID()
-	if kids, ok := idx.namedMemo[id]; ok {
-		return kids
-	}
-	count := int(n.NamedChildCount())
-	out := make([]*sitter.Node, 0, count)
-	for i := 0; i < count; i++ {
-		c := n.NamedChild(i)
-		if c == nil || c.IsExtra() || c.IsMissing() {
-			continue
-		}
-		if l.IsComment(idx.kind(c)) {
-			continue
-		}
-		out = append(out, c)
-	}
-	idx.namedMemo[id] = out
-	return out
-}
 
 // find produces all candidate matches for a matcher across a tree. Only
 // "positive" matchers (pattern/query/any/all) can generate candidates.
-func (cm *compiledMatcher) find(ctx *matchCtx, root *sitter.Node) []Match {
+// root is a flat node index (the file root, 0, from RunIndexed).
+func (cm *compiledMatcher) find(ctx *matchCtx, root int32) []Match {
 	return cm.filterWhere(ctx, cm.findRaw(ctx, root))
 }
 
-func (cm *compiledMatcher) findRaw(ctx *matchCtx, root *sitter.Node) []Match {
+func (cm *compiledMatcher) findRaw(ctx *matchCtx, root int32) []Match {
 	switch cm.kind {
 	case dsl.MatchPattern:
 		if cm.pattern.isSeq {
-			return cm.findSeq(ctx, root)
+			return cm.findSeq(ctx)
 		}
-		return cm.findSingle(ctx, root)
+		return cm.findSingle(ctx)
 	case dsl.MatchQuery:
 		return runQuery(ctx, cm.query, root)
 	case dsl.MatchAny:
@@ -172,7 +79,7 @@ func (cm *compiledMatcher) passesWhereMatch(ctx *matchCtx, m Match) bool {
 		b = Bindings{}
 	}
 	bm := b.clone()
-	bindMatch(bm, m, ctx.tsrc)
+	bindMatch(ctx.ix, bm, m, ctx.tsrc)
 	return cm.passesWhereBindings(ctx, bm)
 }
 
@@ -187,12 +94,12 @@ func (cm *compiledMatcher) passesWhereBindings(ctx *matchCtx, b Bindings) bool {
 
 // passesWhereAt checks branch-scoped `where` predicates for a matcher accepted
 // at a specific node, exposing $match for that node.
-func (cm *compiledMatcher) passesWhereAt(ctx *matchCtx, n *sitter.Node, b Bindings) bool {
+func (cm *compiledMatcher) passesWhereAt(ctx *matchCtx, n int32, b Bindings) bool {
 	if len(cm.where) == 0 {
 		return true
 	}
 	bm := b.clone()
-	bindMatch(bm, mkMatch(n, b), ctx.tsrc)
+	bindMatch(ctx.ix, bm, mkMatch(ctx.ix, n, b), ctx.tsrc)
 	return cm.passesWhereBindings(ctx, bm)
 }
 
@@ -205,110 +112,114 @@ func (cm *compiledMatcher) firstPositive() *compiledMatcher {
 	return nil
 }
 
-func (cm *compiledMatcher) findSingle(ctx *matchCtx, root *sitter.Node) []Match {
+func (cm *compiledMatcher) findSingle(ctx *matchCtx) []Match {
 	ctx.pat = cm.pattern
-	want := cm.pattern.kind(cm.pattern.root)
-	_, rootIsMeta := cm.pattern.metaOf(cm.pattern.root)
+	want := cm.pattern.csym[cm.pattern.root]
+	rootIsMeta := cm.pattern.hasMeta[cm.pattern.root]
 	var out []Match
-	visit := func(n *sitter.Node) {
-		if !rootIsMeta && ctx.tkind(n) != want {
+	b := ctx.scratchBindings()
+	visit := func(n int32) {
+		if !rootIsMeta && ctx.ix.csym[n] != want {
 			return
 		}
-		// Each candidate starts a fresh top-level match, so the binding
-		// journal from previous candidates can be dropped (it only exists to
-		// roll back failed branches within one match attempt).
+		// Each candidate starts a fresh top-level match attempt against the
+		// shared scratch map; the journal rolls every attempt (matched or
+		// not) back to empty, and successful matches keep a clone.
 		ctx.undo = ctx.undo[:0]
-		b := Bindings{}
 		if ctx.matchNode(cm.pattern.root, n, b) {
-			out = append(out, mkMatch(n, b))
+			out = append(out, mkMatch(ctx.ix, n, b.clone()))
 		}
+		ctx.rollback(b, 0)
 	}
-	// A single-kind pattern (the common case) scans only its bucket; otherwise
-	// fall back to a full walk (identical pre-order, so identical results).
-	if ctx.index != nil && !rootIsMeta {
-		for _, n := range ctx.index.byType[want] {
-			visit(n)
+	// A single-kind pattern (the common case) scans only its bucket; a
+	// metavariable root (or the test-only linearScan toggle) scans every
+	// node, in the same pre-order.
+	if !rootIsMeta && !ctx.ix.linearScan {
+		if int(want) < len(ctx.ix.byType) {
+			for _, n := range ctx.ix.byType[want] {
+				visit(n)
+			}
 		}
 	} else {
-		walk(root, visit)
+		for i, count := int32(0), int32(ctx.ix.f.Len()); i < count; i++ {
+			visit(i)
+		}
 	}
 	return out
 }
 
-func (cm *compiledMatcher) findSeq(ctx *matchCtx, root *sitter.Node) []Match {
+func (cm *compiledMatcher) findSeq(ctx *matchCtx) []Match {
 	ctx.pat = cm.pattern
+	ix := ctx.ix
 	var out []Match
-	visit := func(n *sitter.Node) {
-		if n.NamedChildCount() == 0 {
-			return
-		}
-		kids := ctx.tnamed(n)
+	b := ctx.scratchBindings()
+	visit := func(n int32) {
+		kids := ix.named(n)
 		for s := 0; s < len(kids); s++ {
 			ctx.undo = ctx.undo[:0] // fresh top-level attempt; see findSingle
-			b := Bindings{}
 			consumed, ok := ctx.matchPrefix(cm.pattern.seq, kids[s:], b)
 			if ok && consumed > 0 {
 				first := kids[s]
 				last := kids[s+consumed-1]
 				out = append(out, Match{
 					Node:       n,
-					StartByte:  first.StartByte(),
-					EndByte:    last.EndByte(),
-					StartPoint: first.StartPoint(),
-					EndPoint:   last.EndPoint(),
-					Bindings:   b,
+					StartByte:  ix.f.StartByte[first],
+					EndByte:    ix.f.EndByte[last],
+					StartPoint: ix.startPoint(first),
+					EndPoint:   ix.endPoint(last),
+					Bindings:   b.clone(),
 				})
 			}
+			ctx.rollback(b, 0)
 		}
 	}
-	if ctx.index != nil {
-		// Only nodes that parent an instance of the first element's kind can
-		// host the sequence, so scan those instead of every node. When the
-		// first element is (or unwraps from) a transparent wrapper, the
-		// matching target child may carry the wrapper or not, so both the
-		// parent and the transparent grandparent are candidates.
-		first := cm.pattern.unwrapForVariadic(cm.pattern.seq[0])
-		if _, isMeta := cm.pattern.metaOf(first); !isMeta {
-			core := unwrapTransparent(cm.pattern.seq[0], cm.pattern.lang)
-			seenParents := map[uintptr]bool{}
-			addHost := func(h *sitter.Node) {
-				if h == nil || seenParents[h.ID()] {
-					return
-				}
-				seenParents[h.ID()] = true
-				visit(h)
+	// Only nodes that parent an instance of the first element's kind can
+	// host the sequence, so scan those instead of every node. When the
+	// first element is (or unwraps from) a transparent wrapper, the
+	// matching target child may carry the wrapper or not, so both the
+	// parent and the transparent grandparent are candidates.
+	first := cm.pattern.uwVar[cm.pattern.seq[0]]
+	if !cm.pattern.hasMeta[first] && !ix.linearScan {
+		core := cm.pattern.uwTrans[cm.pattern.seq[0]]
+		want := cm.pattern.csym[core]
+		seenParents := map[int32]bool{}
+		addHost := func(h int32) {
+			if seenParents[h] {
+				return
 			}
-			for _, n := range ctx.index.byType[cm.pattern.kind(core)] {
+			seenParents[h] = true
+			visit(h)
+		}
+		if int(want) < len(ix.byType) {
+			for _, n := range ix.byType[want] {
 				// Ascend through every transparent ancestor: the sequence host
 				// is the first non-transparent one, and wrappers can stack
 				// (C# wraps top-level statements as
 				// global_statement(expression_statement(…))).
-				for p := n.Parent(); p != nil; p = p.Parent() {
+				for p := ix.f.Parent[n]; p != -1; p = ix.f.Parent[p] {
 					addHost(p)
-					if !isTransparent(ctx.tkind(p), ctx.l) {
+					if !is(ix.st.transparent, ix.csym[p]) {
 						break
 					}
 				}
 			}
-			return out
 		}
-		for _, n := range ctx.index.all {
-			visit(n)
-		}
-	} else {
-		walk(root, visit)
+		return out
+	}
+	for i, count := int32(0), int32(ix.f.Len()); i < count; i++ {
+		visit(i)
 	}
 	return out
 }
 
 // matchesNode reports whether the matcher accepts a specific node, seeded with
 // existing bindings (for cross-pattern back-references).
-func (cm *compiledMatcher) matchesNode(ctx *matchCtx, n *sitter.Node, seed Bindings) (Bindings, bool) {
+func (cm *compiledMatcher) matchesNode(ctx *matchCtx, n int32, seed Bindings) (Bindings, bool) {
 	switch cm.kind {
 	case dsl.MatchPattern:
 		ctx.pat = cm.pattern
 		if cm.pattern.isSeq {
-			kids := ctx.tnamed(n)
+			kids := ctx.ix.named(n)
 			for s := 0; s < len(kids); s++ {
 				b := seed.clone()
 				if consumed, ok := ctx.matchPrefix(cm.pattern.seq, kids[s:], b); ok && consumed > 0 {
@@ -324,8 +235,8 @@ func (cm *compiledMatcher) matchesNode(ctx *matchCtx, n *sitter.Node, seed Bindi
 		// An open-tag pattern compiles to the start tag, but relation targets
 		// (ancestors, parents) are elements; accept an element whose start
 		// tag matches, so `inside { <form $$$> }` behaves as written.
-		if startTagKinds[cm.pattern.kind(cm.pattern.root)] && elementKinds[ctx.tkind(n)] {
-			if kids := ctx.trel(n); len(kids) > 0 {
+		if is(cm.pattern.syms.startTag, cm.pattern.csym[cm.pattern.root]) && is(ctx.ix.st.element, ctx.ix.csym[n]) {
+			if kids := ctx.ix.rel(n); len(kids) > 0 {
 				b2 := seed.clone()
 				if ctx.matchNode(cm.pattern.root, kids[0], b2) {
 					return b2, true
@@ -339,7 +250,7 @@ func (cm *compiledMatcher) matchesNode(ctx *matchCtx, n *sitter.Node, seed Bindi
 		// like (call_expression function:(identifier)@match) anchor on the call
 		// node even though @match captures the inner identifier.
 		for _, m := range runQuery(ctx, cm.query, n) {
-			if m.hasCover && m.coverStart == n.StartByte() && m.coverEnd <= n.EndByte() {
+			if m.hasCover && m.coverStart == ctx.ix.f.StartByte[n] && m.coverEnd <= ctx.ix.f.EndByte[n] {
 				b := seed.clone()
 				b.merge(m.Bindings)
 				return b, true
@@ -378,19 +289,31 @@ func (cm *compiledMatcher) matchesNode(ctx *matchCtx, n *sitter.Node, seed Bindi
 	return nil, false
 }
 
-func mkMatch(n *sitter.Node, b Bindings) Match {
+func mkMatch(ix *Index, n int32, b Bindings) Match {
 	return Match{
 		Node:       n,
-		StartByte:  n.StartByte(),
-		EndByte:    n.EndByte(),
-		StartPoint: n.StartPoint(),
-		EndPoint:   n.EndPoint(),
+		StartByte:  ix.f.StartByte[n],
+		EndByte:    ix.f.EndByte[n],
+		StartPoint: ix.startPoint(n),
+		EndPoint:   ix.endPoint(n),
 		Bindings:   b,
 	}
 }
 
-// runQuery executes a raw Tree-sitter query over a node's subtree.
-func runQuery(ctx *matchCtx, q *sitter.Query, node *sitter.Node) []Match {
+// runQuery executes a raw Tree-sitter query over a node's subtree. Queries
+// are the one place matching still needs live smacker nodes: the scoped node
+// is rebuilt by child-ordinal descent (cgo, but confined to query rules) and
+// captures are translated back to flat indices by ts_node id.
+func runQuery(ctx *matchCtx, q *sitter.Query, n int32) []Match {
+	var node *sitter.Node
+	if n == 0 {
+		node = ctx.ix.tree.RootNode()
+	} else {
+		node = ctx.ix.sitterNode(n)
+	}
+	if node == nil {
+		return nil
+	}
 	qc := sitter.NewQueryCursor()
 	defer qc.Close()
 	qc.Exec(q, node)
@@ -405,10 +328,10 @@ func runQuery(ctx *matchCtx, q *sitter.Query, node *sitter.Node) []Match {
 			continue
 		}
 		anchor, binds, cs, ce := queryAnchor(ctx, q, m)
-		if anchor == nil {
+		if anchor == noNode {
 			continue
 		}
-		mm := mkMatch(anchor, binds)
+		mm := mkMatch(ctx.ix, anchor, binds)
 		mm.coverStart, mm.coverEnd, mm.hasCover = cs, ce, true
 		out = append(out, mm)
 	}
@@ -418,32 +341,43 @@ func runQuery(ctx *matchCtx, q *sitter.Query, node *sitter.Node) []Match {
 // queryAnchor picks the reported node for a query match (a capture named
 // "match"/"target" if present, otherwise the widest capture), collects all
 // captures as bindings, and returns the cover span over every captured node.
-func queryAnchor(ctx *matchCtx, q *sitter.Query, m *sitter.QueryMatch) (*sitter.Node, Bindings, uint32, uint32) {
+func queryAnchor(ctx *matchCtx, q *sitter.Query, m *sitter.QueryMatch) (int32, Bindings, uint32, uint32) {
 	binds := Bindings{}
-	var anchor *sitter.Node
-	var widest *sitter.Node
+	anchor := noNode
+	widest := noNode
 	var widestSpan uint32
 	var coverStart, coverEnd uint32
 	first := true
 	for _, cap := range m.Captures {
+		ci := ctx.ix.indexOfID(cap.Node.ID())
+		var sb, eb uint32
+		if ci != noNode {
+			sb, eb = ctx.ix.f.StartByte[ci], ctx.ix.f.EndByte[ci]
+		} else {
+			// Defensive: every tree node was extracted, so this should not
+			// happen; fall back to the live node's span.
+			sb, eb = cap.Node.StartByte(), cap.Node.EndByte()
+		}
 		name := q.CaptureNameForId(cap.Index)
-		binds[name] = Binding{Node: cap.Node, Text: cap.Node.Content(ctx.tsrc)}
-		if name == "match" || name == "target" {
-			anchor = cap.Node
+		binds[name] = Binding{Node: ci, Text: string(ctx.tsrc[sb:eb])}
+		if (name == "match" || name == "target") && ci != noNode {
+			anchor = ci
 		}
-		span := cap.Node.EndByte() - cap.Node.StartByte()
-		if widest == nil || span > widestSpan {
-			widest, widestSpan = cap.Node, span
+		span := eb - sb
+		if widest == noNode || span > widestSpan {
+			if ci != noNode {
+				widest, widestSpan = ci, span
+			}
 		}
-		if first || cap.Node.StartByte() < coverStart {
-			coverStart = cap.Node.StartByte()
+		if first || sb < coverStart {
+			coverStart = sb
 		}
-		if first || cap.Node.EndByte() > coverEnd {
-			coverEnd = cap.Node.EndByte()
+		if first || eb > coverEnd {
+			coverEnd = eb
 		}
 		first = false
 	}
-	if anchor == nil {
+	if anchor == noNode {
 		anchor = widest
 	}
 	return anchor, binds, coverStart, coverEnd

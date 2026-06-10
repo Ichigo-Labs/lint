@@ -3,7 +3,9 @@ package runner
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,6 +17,49 @@ import (
 	"github.com/ichigo-labs/lint/internal/engine"
 	"github.com/ichigo-labs/lint/internal/lang"
 )
+
+// fileBuf is a per-worker reusable read buffer: a check reads thousands of
+// files whose contents die as soon as the file is done, so recycling one
+// buffer per worker removes a per-file allocation (and the fstat ReadFile
+// does to size it).
+type fileBuf struct{ b []byte }
+
+// maxRetainedBuf bounds the buffer a worker keeps between files: one huge
+// generated file must not pin a file-sized buffer for the rest of the run.
+const maxRetainedBuf = 4 << 20
+
+// read returns the file's contents. The slice aliases the buffer and is only
+// valid until the next read; callers that retain it must clone.
+func (fb *fileBuf) read(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if cap(fb.b) == 0 {
+		fb.b = make([]byte, 64*1024)
+	}
+	buf := fb.b[:cap(fb.b)]
+	n := 0
+	for {
+		if n == len(buf) {
+			grown := make([]byte, 2*len(buf))
+			copy(grown, buf)
+			buf = grown
+		}
+		m, err := f.Read(buf[n:])
+		n += m
+		if errors.Is(err, io.EOF) {
+			if len(buf) <= maxRetainedBuf {
+				fb.b = buf
+			}
+			return buf[:n], nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+}
 
 // LoadError records a rule file that failed to parse or compile.
 type LoadError struct {
@@ -166,15 +211,18 @@ func (rs *RuleSet) Check(opts Options) (*Result, error) {
 
 	worker := func() {
 		defer wg.Done()
+		var fb fileBuf
 		for j := range jobs {
-			fs, src, ferr := checkFile(j.path, byLang, cwd)
+			fs, src, ferr := checkFile(j.path, byLang, cwd, &fb)
 			mu.Lock()
 			if ferr != nil {
 				res.FileErrs = append(res.FileErrs, LoadError{Path: j.path, Err: ferr})
 			}
 			if len(fs) > 0 {
 				res.Findings = append(res.Findings, fs...)
-				res.Sources[reportPath(j.path, cwd)] = src
+				// src aliases the worker's reusable buffer; only finding
+				// files are retained, so clone just those.
+				res.Sources[reportPath(j.path, cwd)] = bytes.Clone(src)
 			}
 			mu.Unlock()
 		}
@@ -205,7 +253,7 @@ func (rs *RuleSet) Check(opts Options) (*Result, error) {
 	return res, nil
 }
 
-func checkFile(path string, byLang map[string][]ruleRun, cwd string) ([]engine.Finding, []byte, error) {
+func checkFile(path string, byLang map[string][]ruleRun, cwd string, fb *fileBuf) ([]engine.Finding, []byte, error) {
 	l, ok := lang.ForPath(path)
 	if !ok {
 		return nil, nil, nil
@@ -221,7 +269,7 @@ func checkFile(path string, byLang map[string][]ruleRun, cwd string) ([]engine.F
 	if len(applicable) == 0 {
 		return nil, nil, nil
 	}
-	src, err := os.ReadFile(path)
+	src, err := fb.read(path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -241,8 +289,9 @@ func checkFile(path string, byLang map[string][]ruleRun, cwd string) ([]engine.F
 	// Findings carry only extracted strings, so the C-side tree can be
 	// released as soon as this file is done instead of waiting for the GC.
 	defer tree.Close()
-	// Index the tree once and share it across every rule for this file.
-	idx := engine.BuildIndex(tree)
+	// Extract the tree once into its flat index and share it across every
+	// rule for this file; matching then never crosses cgo.
+	idx := engine.BuildIndex(l, tree)
 	var findings []engine.Finding
 	for _, rr := range live {
 		for _, f := range rr.cr.RunIndexed(l, tree, src, idx) {
@@ -253,10 +302,10 @@ func checkFile(path string, byLang map[string][]ruleRun, cwd string) ([]engine.F
 			findings = append(findings, f)
 		}
 	}
-	// Drop findings silenced by inline `lint:ignore` comments. The tree walk
-	// is only worth it when something fired and the directive text appears.
+	// Drop findings silenced by inline `lint:ignore` comments. The comment
+	// scan is only worth it when something fired and the directive appears.
 	if len(findings) > 0 && bytes.Contains(src, []byte("lint:ignore")) {
-		findings = filterSuppressed(findings, collectSuppressions(l, tree, src))
+		findings = filterSuppressed(findings, collectSuppressions(idx, src))
 	}
 	return findings, src, nil
 }
@@ -349,6 +398,18 @@ func collectFiles(paths []string) ([]string, error) {
 
 // reportPath makes a path relative to the working directory when possible.
 func reportPath(path, cwd string) string {
+	// A relative path that doesn't escape upward resolves to its own cleaned
+	// form: Abs is Clean(cwd+path) and Rel then strips cwd back off. Skip the
+	// round trip (it allocates several times per file). Windows drive-relative
+	// ("C:foo") and rooted-driveless ("\x") paths are not IsAbs yet do resolve
+	// against the cwd, so they take the slow path.
+	if path != "" && !filepath.IsAbs(path) &&
+		filepath.VolumeName(path) == "" && !os.IsPathSeparator(path[0]) {
+		clean := filepath.Clean(path)
+		if clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return clean
+		}
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil || cwd == "" {
 		return path

@@ -3,10 +3,7 @@ package runner
 import (
 	"strings"
 
-	sitter "github.com/smacker/go-tree-sitter"
-
 	"github.com/ichigo-labs/lint/internal/engine"
-	"github.com/ichigo-labs/lint/internal/lang"
 )
 
 // suppressions records which rules are silenced on each 1-based source line by
@@ -38,12 +35,12 @@ func (ls *lineSuppress) suppresses(ruleID string) bool {
 	return ls.all || (ls.ids != nil && ls.ids[ruleID])
 }
 
-// collectSuppressions walks a parsed tree for suppression directives in comments.
-// `lint:ignore [ids]` silences the comment's own line; `lint:ignore-next-line
-// [ids]` silences the following line. With no ids, all rules on the target line
-// are silenced. ids may be comma-separated; text after the first whitespace-run
-// is treated as an explanation and ignored.
-func collectSuppressions(l *lang.Language, tree *sitter.Tree, src []byte) suppressions {
+// collectSuppressions scans a file's comments (via the flat index, so no tree
+// walk) for suppression directives. `lint:ignore [ids]` silences the comment's
+// own line; `lint:ignore-next-line [ids]` silences the following line. With no
+// ids, all rules on the target line are silenced. ids may be comma-separated;
+// text after the first whitespace-run is treated as an explanation and ignored.
+func collectSuppressions(idx *engine.Index, src []byte) suppressions {
 	sup := suppressions{}
 	add := func(line int, ids []string) {
 		ls := sup[line]
@@ -53,23 +50,15 @@ func collectSuppressions(l *lang.Language, tree *sitter.Tree, src []byte) suppre
 		}
 		ls.add(ids)
 	}
-	var visit func(n *sitter.Node)
-	visit = func(n *sitter.Node) {
-		if l.IsComment(n.Type()) {
-			line := int(n.StartPoint().Row) + 1
-			if ids, ok := parseDirective(n.Content(src), "lint:ignore-next-line"); ok {
-				add(line+1, ids)
-			} else if ids, ok := parseDirective(n.Content(src), "lint:ignore"); ok {
-				add(line, ids)
-			}
-		}
-		for i := 0; i < int(n.ChildCount()); i++ {
-			if c := n.Child(i); c != nil {
-				visit(c)
-			}
+	for _, c := range idx.Comments() {
+		line := c.Row + 1
+		text := string(src[c.StartByte:c.EndByte])
+		if ids, ok := parseDirective(text, "lint:ignore-next-line"); ok {
+			add(line+1, ids)
+		} else if ids, ok := parseDirective(text, "lint:ignore"); ok {
+			add(line, ids)
 		}
 	}
-	visit(tree.RootNode())
 	return sup
 }
 
