@@ -1,0 +1,25 @@
+rule debug-enabled {
+  message  "debug mode is switched on; turn it off before shipping"
+  severity warning
+  in       yaml
+  note     "Debug mode typically enables verbose logging, stack traces in responses, and slower code paths — all of which leak internals and hurt production performance. Leave it off in committed config."
+
+  pattern { debug: true }
+
+  test {
+    match    """
+server:
+  port: 8080
+logging:
+  level: info
+  debug: true
+"""
+    no_match """
+server:
+  port: 8080
+logging:
+  level: info
+  debug: false
+"""
+  }
+}

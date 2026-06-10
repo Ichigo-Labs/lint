@@ -1,0 +1,25 @@
+rule no-important {
+  message  "avoid `!important` on `$P`; restructure the nesting or specificity instead"
+  severity warning
+  in       scss
+  note     "In SCSS an !important is usually a sign the nesting got too deep to override cleanly. Flatten the selector rather than shouting over it."
+
+  pattern { $P: $$$V !important }
+
+  test {
+    match    """
+.btn {
+  &:hover {
+    color: red !important;
+  }
+}
+"""
+    no_match """
+.btn {
+  &:hover {
+    color: red;
+  }
+}
+"""
+  }
+}

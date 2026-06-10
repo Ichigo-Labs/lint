@@ -2,6 +2,7 @@
 package runner
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -113,6 +114,15 @@ type Result struct {
 	FileErrs []LoadError       // files that failed to read/parse
 }
 
+// ruleRun is a rule pre-resolved for one run: project-config disables, tag
+// filters, and severity overrides are applied once per Check instead of once
+// per file.
+type ruleRun struct {
+	cr          *engine.CompiledRule
+	sevOverride dsl.Severity
+	hasOverride bool
+}
+
 // Check applies the ruleset to the given paths.
 func (rs *RuleSet) Check(opts Options) (*Result, error) {
 	if len(opts.Paths) == 0 {
@@ -128,8 +138,28 @@ func (rs *RuleSet) Check(opts Options) (*Result, error) {
 		return nil, err
 	}
 
+	// Resolve the per-language rule list (with config and tag filters
+	// applied) once per run; checkFile then just looks its language up.
+	byLang := map[string][]ruleRun{}
+	for _, cr := range rs.rules {
+		if rs.config.isDisabled(cr.ID) {
+			continue
+		}
+		if len(opts.TagFilter) > 0 && !anyTag(cr, opts.TagFilter) {
+			continue
+		}
+		sev, hasSev := rs.config.severityFor(cr.ID)
+		for _, l := range cr.Languages() {
+			if len(opts.LangFilter) > 0 && !opts.LangFilter[l.Name] {
+				continue
+			}
+			byLang[l.Name] = append(byLang[l.Name], ruleRun{cr: cr, sevOverride: sev, hasOverride: hasSev})
+		}
+	}
+	cwd, _ := os.Getwd()
+
 	type job struct{ path string }
-	jobs := make(chan job)
+	jobs := make(chan job, conc)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	res := &Result{Sources: map[string][]byte{}}
@@ -137,14 +167,14 @@ func (rs *RuleSet) Check(opts Options) (*Result, error) {
 	worker := func() {
 		defer wg.Done()
 		for j := range jobs {
-			fs, src, ferr := rs.checkFile(j.path, opts.LangFilter, opts.TagFilter)
+			fs, src, ferr := checkFile(j.path, byLang, cwd)
 			mu.Lock()
 			if ferr != nil {
 				res.FileErrs = append(res.FileErrs, LoadError{Path: j.path, Err: ferr})
 			}
 			if len(fs) > 0 {
 				res.Findings = append(res.Findings, fs...)
-				res.Sources[reportPath(j.path)] = src
+				res.Sources[reportPath(j.path, cwd)] = src
 			}
 			mu.Unlock()
 		}
@@ -175,15 +205,19 @@ func (rs *RuleSet) Check(opts Options) (*Result, error) {
 	return res, nil
 }
 
-func (rs *RuleSet) checkFile(path string, langFilter, tagFilter map[string]bool) ([]engine.Finding, []byte, error) {
+func checkFile(path string, byLang map[string][]ruleRun, cwd string) ([]engine.Finding, []byte, error) {
 	l, ok := lang.ForPath(path)
 	if !ok {
 		return nil, nil, nil
 	}
-	if len(langFilter) > 0 && !langFilter[l.Name] {
+	applicable := byLang[l.Name]
+	if len(applicable) == 0 {
 		return nil, nil, nil
 	}
-	applicable := rs.applicable(l)
+	rp := reportPath(path, cwd)
+	// Path-scoped rules (`paths` / `exclude` globs) only apply to matching
+	// files; drop the rest before touching the file at all.
+	applicable = pruneByPath(applicable, rp)
 	if len(applicable) == 0 {
 		return nil, nil, nil
 	}
@@ -191,46 +225,80 @@ func (rs *RuleSet) checkFile(path string, langFilter, tagFilter map[string]bool)
 	if err != nil {
 		return nil, nil, err
 	}
+	// Skip rules whose anchor literal can't appear in this file; if none
+	// remain the file needs no parse at all.
+	live := applicable
+	if pruned := pruneByAnchor(applicable, l, src); len(pruned) != len(applicable) {
+		if len(pruned) == 0 {
+			return nil, nil, nil
+		}
+		live = pruned
+	}
 	tree, err := engine.ParseSource(l, src)
 	if err != nil {
 		return nil, nil, err
 	}
-	rp := reportPath(path)
+	// Findings carry only extracted strings, so the C-side tree can be
+	// released as soon as this file is done instead of waiting for the GC.
+	defer tree.Close()
 	// Index the tree once and share it across every rule for this file.
 	idx := engine.BuildIndex(tree)
 	var findings []engine.Finding
-	for _, cr := range applicable {
-		if rs.config.isDisabled(cr.ID) {
-			continue
-		}
-		if !pathMatches(cr, rp) {
-			continue
-		}
-		if len(tagFilter) > 0 && !anyTag(cr, tagFilter) {
-			continue
-		}
-		sevOverride, hasOverride := rs.config.severityFor(cr.ID)
-		for _, f := range cr.RunIndexed(l, tree, src, idx) {
+	for _, rr := range live {
+		for _, f := range rr.cr.RunIndexed(l, tree, src, idx) {
 			f.File = rp
-			if hasOverride {
-				f.Severity = sevOverride
+			if rr.hasOverride {
+				f.Severity = rr.sevOverride
 			}
 			findings = append(findings, f)
 		}
 	}
-	// Drop findings silenced by inline `lint:ignore` comments (only worth the
-	// tree walk when something actually fired).
-	if len(findings) > 0 {
+	// Drop findings silenced by inline `lint:ignore` comments. The tree walk
+	// is only worth it when something fired and the directive text appears.
+	if len(findings) > 0 && bytes.Contains(src, []byte("lint:ignore")) {
 		findings = filterSuppressed(findings, collectSuppressions(l, tree, src))
 	}
 	return findings, src, nil
 }
 
-func (rs *RuleSet) applicable(l *lang.Language) []*engine.CompiledRule {
-	var out []*engine.CompiledRule
-	for _, cr := range rs.rules {
-		if rs.ruleTargets(cr, l) {
-			out = append(out, cr)
+// pruneByPath drops rules whose path globs exclude the file (copy-on-write,
+// like pruneByAnchor).
+func pruneByPath(rules []ruleRun, rp string) []ruleRun {
+	out := rules
+	copied := false
+	for i, rr := range rules {
+		if pathMatches(rr.cr, rp) {
+			if copied {
+				out = append(out, rr)
+			}
+			continue
+		}
+		if !copied {
+			out = make([]ruleRun, 0, len(rules)-1)
+			out = append(out, rules[:i]...)
+			copied = true
+		}
+	}
+	return out
+}
+
+// pruneByAnchor drops rules whose required anchor literal does not occur in
+// the file's bytes. A rule with no anchor is always kept.
+func pruneByAnchor(rules []ruleRun, l *lang.Language, src []byte) []ruleRun {
+	out := rules
+	copied := false
+	for i, rr := range rules {
+		a := rr.cr.AnchorFor(l)
+		if a == "" || bytes.Contains(src, []byte(a)) {
+			if copied {
+				out = append(out, rr)
+			}
+			continue
+		}
+		if !copied {
+			out = make([]ruleRun, 0, len(rules)-1)
+			out = append(out, rules[:i]...)
+			copied = true
 		}
 	}
 	return out
@@ -240,15 +308,6 @@ func (rs *RuleSet) applicable(l *lang.Language) []*engine.CompiledRule {
 func anyTag(cr *engine.CompiledRule, tagFilter map[string]bool) bool {
 	for _, t := range cr.Tags {
 		if tagFilter[t] {
-			return true
-		}
-	}
-	return false
-}
-
-func (rs *RuleSet) ruleTargets(cr *engine.CompiledRule, l *lang.Language) bool {
-	for _, rl := range cr.Languages() {
-		if rl.Name == l.Name {
 			return true
 		}
 	}
@@ -289,13 +348,9 @@ func collectFiles(paths []string) ([]string, error) {
 }
 
 // reportPath makes a path relative to the working directory when possible.
-func reportPath(path string) string {
+func reportPath(path, cwd string) string {
 	abs, err := filepath.Abs(path)
-	if err != nil {
-		return path
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
+	if err != nil || cwd == "" {
 		return path
 	}
 	rel, err := filepath.Rel(cwd, abs)

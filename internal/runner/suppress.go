@@ -105,10 +105,13 @@ func parseDirective(comment, keyword string) ([]string, bool) {
 
 func isSpaceByte(b byte) bool { return b == ' ' || b == '\t' }
 
-// stripCommentDelims removes leading //, #, /* and trailing */ from comment text.
+// stripCommentDelims removes leading //, #, /*, <!-- and trailing */, -->
+// from comment text.
 func stripCommentDelims(s string) string {
 	s = strings.TrimSpace(s)
 	switch {
+	case strings.HasPrefix(s, "<!--"):
+		s = strings.TrimSuffix(strings.TrimSpace(s[4:]), "-->")
 	case strings.HasPrefix(s, "//"):
 		s = s[2:]
 	case strings.HasPrefix(s, "/*"):

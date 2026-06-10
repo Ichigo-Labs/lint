@@ -87,7 +87,7 @@ is exactly the pattern `foo()`.
 | `message` | `msg` | The text shown for a finding. May reference captures (see below). Defaults to the rule id. |
 | `severity` | — | `error`, `warning` (default), or `info`. `warn` is accepted for `warning`. |
 | `note` | `help` | An optional longer explanation printed under the finding. |
-| `in` | `language`, `languages` | Comma-separated languages this rule applies to, e.g. `in go, typescript`. If omitted, the rule is compiled for **every** language whose grammar can parse its pattern. |
+| `in` | `language`, `languages` | Comma-separated languages this rule applies to, e.g. `in go, typescript`. If omitted, the rule is compiled for **every** language whose grammar can parse its pattern — except `html`, `xml`, `css`, `scss`, `json`, and `yaml`, which are only targeted when named explicitly. |
 | `url` | `link` | An optional link to a longer explanation / style-guide entry. Surfaced in `--json`. |
 | `tags` | `tag` | Comma-separated free-form labels, e.g. `tags security, correctness`. Surfaced in `--json` and selectable with `lint check --tag`. |
 | `paths` | `path` | Comma-separated (or bracketed) string globs restricting the rule to matching files, e.g. `paths "src/components/**"`. See [Path scoping](#path-scoping). |

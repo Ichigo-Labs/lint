@@ -32,7 +32,8 @@ func newRootCmd() *cobra.Command {
 
 Rules live in a .lint/ directory at the project root as NAME.lint files written
 in a small DSL that matches code by its syntax tree (not regex), across C, C++,
-C#, Go, Java, Kotlin, Python, Rust, Swift, and TypeScript/JavaScript.
+C#, Go, Java, Kotlin, Python, Rust, Swift, TypeScript/JavaScript, HTML, XML,
+CSS/SCSS, JSON, and YAML.
 
 Running 'lint' with no subcommand checks the current directory.`,
 		Args:          cobra.ArbitraryArgs,

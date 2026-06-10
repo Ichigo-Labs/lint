@@ -1,0 +1,24 @@
+rule no-target-blank {
+  message  "link opens in a new tab without rel; add rel=\"noopener\" (or noreferrer)"
+  severity info
+  in       html
+  note     "target=\"_blank\" steals the user's context, and without rel=\"noopener\" the opened page gets a window.opener handle back to yours (on older browsers; modern ones default to noopener)."
+
+  pattern { <a $$$ target="_blank" $$$> }
+  not pattern { <a $$$ rel=$_ $$$> }
+
+  test {
+    match    """
+<a href="/promo" target="_blank">promo</a>
+"""
+    no_match """
+<a href="/promo" target="_blank" rel="noopener">promo</a>
+"""
+    no_match """
+<a href="/promo">promo</a>
+"""
+    no_match """
+<a href="/promo" target="_self">promo</a>
+"""
+  }
+}

@@ -1,0 +1,26 @@
+rule no-http-registry {
+  message  "`$K` points at the plaintext URL `$URL`; use https://"
+  severity warning
+  in       json
+  note     "A plaintext http:// registry or endpoint lets anyone on the path read and tamper with what you download. Switch the URL to https://."
+
+  pattern { "$K": "$URL" }
+  where    $URL matches "^http://"
+
+  test {
+    match    """
+{
+  "publishConfig": {
+    "registry": "http://registry.example.com/npm"
+  }
+}
+"""
+    no_match """
+{
+  "publishConfig": {
+    "registry": "https://registry.example.com/npm"
+  }
+}
+"""
+  }
+}

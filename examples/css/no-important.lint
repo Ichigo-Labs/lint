@@ -1,0 +1,14 @@
+rule no-important {
+  message  "avoid `!important` on `$P`; fix the specificity or source order instead"
+  severity warning
+  in       css
+  note     "!important breaks the cascade: the only way to override it later is another !important, and the arms race escalates from there."
+
+  pattern { $P: $$$V !important }
+
+  test {
+    match    ".btn { color: red !important; }"
+    match    ".nav a { display: none !important; }"
+    no_match ".btn { color: red; }"
+  }
+}

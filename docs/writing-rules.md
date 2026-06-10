@@ -8,6 +8,7 @@ A practical guide to authoring `.lint` rules. For the exhaustive syntax, see the
 - [The metavariable model](#the-metavariable-model)
 - [How patterns compile](#how-patterns-compile)
 - [Common patterns by language](#common-patterns-by-language)
+- [Markup, style, and data languages](#markup-style-and-data-languages)
 - [Narrowing with `where` and relations](#narrowing-with-where-and-relations)
 - [Fixes](#fixes)
 - [Tests](#tests)
@@ -131,11 +132,66 @@ They show the range of what one short pattern can express.
 | Rust | `pattern { $X.unwrap_or(Default::default()) }` | a verbose `unwrap_or` |
 | Swift | `pattern { $X as! $T }` | a force cast (prefer `as?`) |
 | TypeScript | `pattern { $X! }` | a non-null assertion |
+| HTML | `pattern { <$_ $$$ style=$_ $$$> }` | any element with an inline `style` attribute |
+| CSS / SCSS | `pattern { $P: $$$V !important }` | any `!important` declaration |
+| SCSS | `pattern { color: $C }` + `where $C matches "^#"` | a hard-coded color literal |
+| XML | `pattern { <version>$V</version> }` + `where $V matches "-SNAPSHOT$"` | a SNAPSHOT dependency version |
+| JSON | `pattern { "$NAME": "$V" }` + `where $V matches "-SNAPSHOT$"` | a SNAPSHOT version in any pair |
+| YAML | `pattern { image: $IMG }` + `where $IMG matches ":latest$"` | a `:latest` container image |
 | C | `query "(function_definition) @match"` | a whole function (then filter with `has`) |
 
 A rule can target several languages at once when the pattern is valid in each —
 `gets()` is flagged in both C and C++ with `in c, cpp`. Omit `in` entirely and
-the rule compiles for *every* language whose grammar accepts the pattern.
+the rule compiles for *every* language whose grammar accepts the pattern —
+except HTML, XML, CSS, SCSS, JSON, and YAML, which must always be named
+explicitly (their grammars accept nearly any text, so implicit targeting
+would misfire).
+
+## Markup, style, and data languages
+
+HTML, XML, CSS, SCSS, JSON, and YAML patterns follow the same metavariable
+model, with a few semantics specific to these grammars:
+
+- **Open-tag patterns match start tags.** `<div $$$ style=$_ $$$>` (no closing
+  tag) matches the start tag of *any* matching element, closed or not. A full
+  element pattern (`<li>$X</li>`) matches whole elements. One quirk: an open
+  tag needs at least one attribute (or `$$$`) to parse — write `<div $$$>`,
+  not a bare `<div>`.
+- **Metavariables work inside quoted attribute values.** `<a href="$URL">`
+  binds the value without its quotes. (In code languages `$` stays literal
+  inside strings; markup attribute values are where metavariables are most
+  useful, so the rewrite applies there.) In HTML, an unquoted `attr=$X` form
+  also matches quoted targets; XML patterns must quote attribute values to
+  parse.
+- **Quoting and case are normalized in HTML.** `class=x` matches `class="x"`,
+  and tag/attribute names compare case-insensitively — `<div $$$ style=$_ $$$>`
+  also flags `<DIV STYLE="…">`. XML stays case-sensitive, per spec, and
+  compares quoted values as written.
+- **XML attribute variadics.** `<dependency $$$A>$$$C</dependency>` matches a
+  `<dependency>` element with any attributes and children. A self-closing
+  pattern (`<a $$$/>`) only matches self-closing elements — `<a/>` and
+  `<a></a>` are distinct syntax. Use `any { … }` to cover both.
+- **SCSS variables stay literal.** In `in scss` rules, `$lowercase` is SCSS's
+  own variable syntax and matches literally; only `$UPPERCASE`, `$_`, and
+  `$$$` are metavariables. (`pattern { color: $primary }` finds uses of the
+  `$primary` variable; `pattern { color: $C }` captures any value.)
+- **A metavariable must cover a whole value, name, or text node.**
+  `<p>hello $X</p>` does not compile — HTML lexes `hello $X` into one text
+  token, so the metavariable cannot bind. Match the whole text (`<p>$T</p>`)
+  and narrow with `where $T matches "..."`. The same applies to CSS colors:
+  write `color: $C` + `where $C matches "^#"`, not `color: #$C`.
+- **JSON metavariables may be written bare or quoted.** `"version": $V` and
+  `"version": "$V"` are equivalent: JSON has no bare-token form, so the
+  rewrite quotes the metavariable, and the quoted form matches a value of
+  *any* kind — string content binds without its quotes. Object variadics
+  (`{"a": 1, $$$}`) are not expressible; match the pair (`"a": 1`) instead,
+  which finds it in any object at any depth.
+- **YAML pairs match at any depth.** `image: $IMG` finds the pair nested
+  anywhere (a Kubernetes container spec, say). Quoted and plain scalars are
+  distinct kinds: `name: "x"` does not match `name: x`. YAML patterns are
+  indentation-sensitive like YAML itself; fragments parse at the top level.
+- **Explicit `in` required.** These languages are never targeted implicitly;
+  a rule must say `in html`, `in css, scss`, `in yaml`, etc.
 
 ## Narrowing with `where` and relations
 
@@ -200,6 +256,9 @@ complete file in the rule's language. Write them as standalone, parseable code:
   `class C { void m() { ... } }`.
 - **Python / TypeScript / C / C++ / Rust:** a top-level statement or declaration
   is usually fine.
+- **HTML / XML / CSS / SCSS / YAML:** any fragment parses at the top level
+  (`<div>x</div>`, `a { color: red; }`, `key: value`).
+- **JSON:** the snippet must be a single JSON document (`{"key": 1}`).
 
 (Tree-sitter is forgiving and a fragment will sometimes still match, but don't
 rely on it — a malformed snippet can parse into the wrong shape and give a

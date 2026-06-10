@@ -1,0 +1,33 @@
+rule no-wildcard-dependency {
+  message  "dependency `$NAME` uses the wildcard version `$V`; pin a real version range"
+  severity warning
+  in       json
+  note     "\"*\" and \"latest\" resolve to whatever happens to be newest at install time, so two installs of the same lockfile-less manifest can differ. Pin a version or a bounded range."
+
+  pattern { "$NAME": "$V" }
+  where    $V in ["*", "latest"]
+
+  test {
+    match    """
+{
+  "dependencies": {
+    "left-pad": "*"
+  }
+}
+"""
+    match    """
+{
+  "devDependencies": {
+    "typescript": "latest"
+  }
+}
+"""
+    no_match """
+{
+  "dependencies": {
+    "left-pad": "^1.3.0"
+  }
+}
+"""
+  }
+}

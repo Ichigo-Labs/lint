@@ -1,0 +1,22 @@
+rule no-color-literals {
+  message  "hard-coded color `$C`; use a theme variable instead"
+  severity warning
+  in       scss
+  note     "Hex colors scattered through partials drift apart over time. Put the color in one $variable (or a map) and reference it."
+
+  pattern { color: $C }
+  where    $C matches "^#"
+
+  test {
+    match    ".btn { color: #ff0000; }"
+    match    """
+.card {
+  &:hover {
+    color: #333;
+  }
+}
+"""
+    no_match ".btn { color: $brand-color; }"
+    no_match ".btn { color: red; }"
+  }
+}

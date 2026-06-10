@@ -1,0 +1,15 @@
+rule vendor-prefix {
+  message  "`$P` is a vendor-prefixed property; write the standard property and let autoprefixer add prefixes"
+  severity info
+  in       css
+  note     "Hand-written -webkit-/-moz-/-ms-/-o- prefixes go stale as browsers ship the unprefixed property. Generate prefixes at build time if you still need them."
+
+  pattern { $P: $$$ }
+  where    $P matches "^-(webkit|moz|ms|o)-"
+
+  test {
+    match    ".box { -webkit-transition: all 0.3s; }"
+    match    ".box { -moz-user-select: none; }"
+    no_match ".box { transition: all 0.3s; }"
+  }
+}

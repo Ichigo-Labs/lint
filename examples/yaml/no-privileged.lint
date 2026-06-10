@@ -1,0 +1,31 @@
+rule no-privileged {
+  message  "container runs privileged; it has full access to the host"
+  severity warning
+  in       yaml
+  note     "privileged: true disables almost every container isolation mechanism — the container can load kernel modules, access host devices, and escape to the node. Grant the specific capability you need instead."
+
+  pattern { privileged: true }
+
+  test {
+    match    """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: worker
+      image: worker:1.2.0
+      securityContext:
+        privileged: true
+"""
+    no_match """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: worker
+      image: worker:1.2.0
+      securityContext:
+        privileged: false
+"""
+  }
+}

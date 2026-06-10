@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
 
@@ -86,6 +87,7 @@ type langRule struct {
 	root      *compiledMatcher
 	where     []compiledConstraint
 	relations []compiledRelation
+	anchor    string // see matcherAnchor
 }
 
 type compiledMatcher struct {
@@ -146,6 +148,11 @@ func Compile(r *dsl.Rule) (*CompiledRule, error) {
 	} else {
 		for _, name := range lang.Names() {
 			l, _ := lang.Get(name)
+			// Markup/style grammars parse nearly any text, so they are only
+			// targeted when the rule names them explicitly.
+			if l.ExplicitOnly {
+				continue
+			}
 			targets = append(targets, l)
 		}
 	}
@@ -177,7 +184,7 @@ func compileForLang(l *lang.Language, r *dsl.Rule) (*langRule, error) {
 	if !canGenerate(root) {
 		return nil, fmt.Errorf("rule needs at least one positive pattern/query (a rule made only of `not` cannot select anything)")
 	}
-	lr := &langRule{l: l, root: root}
+	lr := &langRule{l: l, root: root, anchor: matcherAnchor(root)}
 	for _, c := range r.Where {
 		cc, err := compileConstraint(l, c)
 		if err != nil {
@@ -191,8 +198,59 @@ func compileForLang(l *lang.Language, r *dsl.Rule) (*langRule, error) {
 			return nil, err
 		}
 		lr.relations = append(lr.relations, compiledRelation{kind: rel.Kind, matcher: m})
+		// A positive relation must also match somewhere in the file, so its
+		// anchor is required too; keep the most selective one.
+		if isPositiveRelation(rel.Kind) {
+			if a := matcherAnchor(m); len(a) > len(lr.anchor) {
+				lr.anchor = a
+			}
+		}
 	}
 	return lr, nil
+}
+
+// isPositiveRelation reports whether a relation asserts presence (its matcher
+// must match for a finding to survive), as opposed to a `not` relation.
+func isPositiveRelation(k dsl.RelationKind) bool {
+	switch k {
+	case dsl.RelInside, dsl.RelHas, dsl.RelPrecedes, dsl.RelFollows,
+		dsl.RelDirectlyInside, dsl.RelDirectlyHas:
+		return true
+	}
+	return false
+}
+
+// AnchorFor returns a byte string every match of this rule in language l must
+// contain, or "" when no such prefilter exists. Callers may skip files (and
+// their parses) that don't contain the anchor.
+func (r *CompiledRule) AnchorFor(l *lang.Language) string {
+	if lr, ok := r.byLang[l.Name]; ok {
+		return lr.anchor
+	}
+	return ""
+}
+
+// matcherAnchor derives a required token for a matcher tree. A pattern
+// requires its own anchor; `all` requires each positive child, so the longest
+// child anchor works; `any` and queries provide no single requirement.
+func matcherAnchor(cm *compiledMatcher) string {
+	switch cm.kind {
+	case dsl.MatchPattern:
+		return cm.pattern.anchor
+	case dsl.MatchAll:
+		best := ""
+		for _, ch := range cm.children {
+			if ch.kind == dsl.MatchNot {
+				continue
+			}
+			if a := matcherAnchor(ch); len(a) > len(best) {
+				best = a
+			}
+		}
+		return best
+	default: // MatchAny, MatchQuery, MatchNot
+		return ""
+	}
 }
 
 // canGenerate reports whether a matcher can produce candidate nodes on its
@@ -299,9 +357,14 @@ func compileConstraint(l *lang.Language, c dsl.Constraint) (compiledConstraint, 
 
 // --- execution -----------------------------------------------------------
 
+// parserPool reuses Tree-sitter parsers across files; creating one is a cgo
+// allocation plus finalizer registration that would otherwise happen per file.
+var parserPool = sync.Pool{New: func() any { return sitter.NewParser() }}
+
 // ParseSource parses source bytes under a language grammar.
 func ParseSource(l *lang.Language, src []byte) (*sitter.Tree, error) {
-	parser := sitter.NewParser()
+	parser := parserPool.Get().(*sitter.Parser)
+	defer parserPool.Put(parser)
 	parser.SetLanguage(l.Grammar())
 	return parser.ParseCtx(context.Background(), nil, src)
 }
@@ -326,7 +389,7 @@ func (r *CompiledRule) RunIndexed(l *lang.Language, tree *sitter.Tree, src []byt
 	candidates := lr.root.find(ctx, root)
 
 	var findings []Finding
-	seen := map[[2]uint32]bool{}
+	var seen map[[2]uint32]bool
 	for _, m := range candidates {
 		b := m.Bindings
 		if b == nil {
@@ -342,6 +405,9 @@ func (r *CompiledRule) RunIndexed(l *lang.Language, tree *sitter.Tree, src []byt
 		key := [2]uint32{m.StartByte, m.EndByte}
 		if seen[key] {
 			continue
+		}
+		if seen == nil {
+			seen = map[[2]uint32]bool{}
 		}
 		seen[key] = true
 		findings = append(findings, r.toFinding(m, b, src))
@@ -488,7 +554,7 @@ func matchSibling(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindi
 	if block == nil {
 		return false, nil
 	}
-	sibs := relevantChildren(block, ctx.l)
+	sibs := ctx.trel(block)
 	idx := indexOfNode(sibs, stmt)
 	if idx < 0 {
 		return false, nil
@@ -549,7 +615,7 @@ func matchDirectParent(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed 
 // matchDirectChild tests the candidate's immediate (relevant) children against
 // the matcher — a depth-1 version of matchDescendant.
 func matchDirectChild(ctx *matchCtx, cm *compiledMatcher, n *sitter.Node, seed Bindings) (bool, Bindings) {
-	for _, c := range relevantChildren(n, ctx.l) {
+	for _, c := range ctx.trel(n) {
 		if nb, ok := cm.matchesNode(ctx, c, seed); ok {
 			return true, nb
 		}

@@ -25,14 +25,29 @@ main.go
 | C | `c` | `.c .h` |
 | C++ | `cpp` (`c++`, `cc`) | `.cpp .cxx .cc .hpp .hxx .hh` |
 | C# | `csharp` (`cs`, `c#`) | `.cs` |
+| CSS / SCSS | `css` · `scss` | `.css` · `.scss` |
 | Go | `go` (`golang`) | `.go` |
+| HTML | `html` | `.html .htm` |
 | Java | `java` | `.java` |
+| JSON | `json` (`jsonc`) | `.json .jsonc` |
 | Kotlin | `kotlin` (`kt`, `kts`) | `.kt .kts` |
 | Python | `python` (`py`) | `.py .pyi` |
 | Rust | `rust` (`rs`) | `.rs` |
 | Swift | `swift` | `.swift` |
-| TypeScript | `typescript` (`ts`) | `.ts .mts .cts` |
-| TSX / JS | `tsx` (`javascript`, `js`, `jsx`) | `.tsx .js .jsx .mjs .cjs` |
+| TypeScript / JavaScript | `typescript` (`ts`) · `tsx` (`javascript`, `js`, `jsx`) | `.ts .mts .cts` · `.tsx .js .jsx .mjs .cjs` |
+| XML | `xml` | `.xml .svg .xsd .xsl .xslt` |
+| YAML | `yaml` (`yml`) | `.yaml .yml` |
+
+Rows with a `·` group two registered languages of one family: the first `in`
+name covers the first extension list, the second the second. `.ts` files use
+the `typescript` grammar; `.tsx`/`.js` files use the `tsx` grammar — write
+`in typescript, tsx` to cover both. Likewise `in css, scss`.
+
+> **Note:** HTML, XML, CSS, SCSS, JSON, and YAML are only checked by rules
+> that name them explicitly in an `in` clause. Their grammars parse nearly any
+> text (a Python dict literal is valid JSON; almost anything is valid YAML),
+> so rules that omit `in` (which normally compile for every language that can
+> parse the pattern) skip them.
 
 (Run `lint langs` to print this list.)
 
@@ -176,8 +191,9 @@ The `where $M in [...]` line shows a capture (`$M`, the method name) being
 constrained to a fixed set, so `console.error(...)` is *not* flagged.
 
 There are ready-to-read examples for every language under
-[`examples/`](examples/): `c/`, `cpp/`, `csharp/`, `go/`, `java/`, `kotlin/`,
-`python/`, `rust/`, `swift/`, and `typescript/`.
+[`examples/`](examples/): `c/`, `cpp/`, `csharp/`, `css/`, `go/`, `html/`,
+`java/`, `json/`, `kotlin/`, `python/`, `rust/`, `scss/`, `swift/`,
+`typescript/`, `xml/`, and `yaml/`.
 
 ## Documentation
 

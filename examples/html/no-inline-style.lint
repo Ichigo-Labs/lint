@@ -1,0 +1,20 @@
+rule no-inline-style {
+  message  "avoid inline `style` attributes; move the styles into a stylesheet"
+  severity warning
+  in       html
+  note     "Inline styles override stylesheets, cannot be reused, and make theming harder. Add a class and a CSS rule instead."
+
+  pattern { <$_ $$$ style=$_ $$$> }
+
+  test {
+    match    """
+<div style="color: red">hello</div>
+"""
+    match    """
+<p class="intro" style="margin: 0">text</p>
+"""
+    no_match """
+<div class="red">hello</div>
+"""
+  }
+}

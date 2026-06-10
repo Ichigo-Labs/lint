@@ -1,0 +1,17 @@
+rule no-marquee {
+  message  "<marquee> is obsolete; use a CSS animation instead"
+  severity warning
+  in       html
+  note     "The marquee element was never standardized and is removed from modern HTML. CSS animations or transitions cover the same effect."
+
+  pattern { <marquee $$$> }
+
+  test {
+    match    """
+<marquee>breaking news</marquee>
+"""
+    no_match """
+<div class="ticker">breaking news</div>
+"""
+  }
+}

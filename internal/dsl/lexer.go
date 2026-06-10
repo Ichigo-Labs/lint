@@ -410,9 +410,15 @@ func (l *lexer) readBraceBlock() (string, error) {
 				l.advance()
 			}
 		case '#':
-			// Line comment in Python/shell-ish targets; harmless elsewhere
-			// because '#' rarely starts code that contains an unmatched brace.
-			for !l.eof() && l.cur() != '\n' {
+			// Line comment in Python/shell-ish targets, but only when followed
+			// by whitespace: '#' glued to text is code (a CSS color `#fff`, an
+			// id selector `#main`), and skipping to EOL there would miscount a
+			// closing brace on the same line.
+			if l.pos+1 >= len(l.src) || l.src[l.pos+1] == ' ' || l.src[l.pos+1] == '\t' || l.src[l.pos+1] == '\n' {
+				for !l.eof() && l.cur() != '\n' {
+					l.advance()
+				}
+			} else {
 				l.advance()
 			}
 		default:

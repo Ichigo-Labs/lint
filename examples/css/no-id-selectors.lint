@@ -1,0 +1,13 @@
+rule no-id-selectors {
+  message  "avoid styling by id; use a class so the rule stays reusable"
+  severity info
+  in       css
+  note     "Id selectors carry very high specificity and only ever apply to one element, which makes overrides and reuse painful. A class does the same job."
+
+  query    "(id_selector) @match"
+
+  test {
+    match    "#main { color: red; }"
+    no_match ".main { color: red; }"
+  }
+}

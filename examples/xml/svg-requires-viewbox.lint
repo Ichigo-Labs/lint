@@ -1,0 +1,18 @@
+rule svg-requires-viewbox {
+  message  "<svg> without a viewBox cannot scale; add viewBox=\"0 0 <width> <height>\""
+  severity warning
+  in       xml
+  note     "Width/height alone pin the image to one size. The viewBox establishes the internal coordinate system so the SVG can be resized by CSS. (Self-closing <svg/> elements are not flagged; an empty svg renders nothing anyway.)"
+
+  pattern { <svg $$$A>$$$C</svg> }
+  not pattern { <svg $$$ viewBox="$_" $$$>$$$</svg> }
+
+  test {
+    match    """
+<svg width="100" height="100"><rect width="100" height="100"/></svg>
+"""
+    no_match """
+<svg viewBox="0 0 100 100"><rect width="100" height="100"/></svg>
+"""
+  }
+}

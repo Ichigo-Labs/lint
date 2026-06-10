@@ -1,0 +1,28 @@
+rule no-snapshot-versions {
+  message  "SNAPSHOT version `$V` for `$NAME` must not be referenced from a release build"
+  severity warning
+  in       json
+  note     "A -SNAPSHOT dependency changes underneath you on every publish, so the same manifest can produce different builds on different days. Pin an exact release version instead."
+
+  pattern { "$NAME": "$V" }
+  where    $V matches "-SNAPSHOT$"
+
+  test {
+    match    """
+{
+  "name": "billing-service",
+  "dependencies": {
+    "com.example:core": "1.4.0-SNAPSHOT"
+  }
+}
+"""
+    no_match """
+{
+  "name": "billing-service",
+  "dependencies": {
+    "com.example:core": "1.4.0"
+  }
+}
+"""
+  }
+}

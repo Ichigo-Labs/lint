@@ -1,0 +1,26 @@
+rule no-snapshot-versions {
+  message  "SNAPSHOT version `$V` must not be referenced from a release build"
+  severity warning
+  in       xml
+  note     "A -SNAPSHOT dependency changes underneath you on every publish, so the same pom can produce different builds on different days."
+
+  pattern { <version>$V</version> }
+  where    $V matches "-SNAPSHOT$"
+
+  test {
+    match    """
+<dependency>
+  <groupId>com.example</groupId>
+  <artifactId>core</artifactId>
+  <version>1.4.0-SNAPSHOT</version>
+</dependency>
+"""
+    no_match """
+<dependency>
+  <groupId>com.example</groupId>
+  <artifactId>core</artifactId>
+  <version>1.4.0</version>
+</dependency>
+"""
+  }
+}

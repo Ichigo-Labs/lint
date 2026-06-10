@@ -201,22 +201,27 @@ func newNewCmd() *cobra.Command {
 			if inLine == "" {
 				inLine = "go"
 			}
+			family := ""
+			for _, part := range strings.Split(inLine, ",") {
+				l, ok := lang.Get(strings.TrimSpace(part))
+				if !ok {
+					return fmt.Errorf("unknown language %q (run `lint langs` for the list)", strings.TrimSpace(part))
+				}
+				f := templateFamily(l.Name)
+				if family == "" {
+					family = f
+				} else if family != f {
+					return fmt.Errorf("languages %q span different pattern families (%s vs %s); no one scaffold pattern parses in both — create separate rules", inLine, family, f)
+				}
+			}
+			body := ruleTemplates[family]
 			tmpl := fmt.Sprintf(`rule %s {
   message  "Describe what's wrong and what to do instead"
   severity warning
   in       %s
 
-  pattern { yourFunction($$$ARGS) }
-
-  # where    $ARGS matches "..."
-  # fix      "betterFunction($$$ARGS)"
-
-  test {
-    match    "yourFunction(1, 2)"
-    no_match "betterFunction(1, 2)"
-  }
-}
-`, name, inLine)
+%s}
+`, name, inLine, body)
 			if err := os.WriteFile(path, []byte(tmpl), 0o644); err != nil {
 				return err
 			}
@@ -229,16 +234,99 @@ func newNewCmd() *cobra.Command {
 	return cmd
 }
 
+// templateFamily picks the scaffold body family for a canonical language name.
+func templateFamily(name string) string {
+	switch name {
+	case "html", "xml":
+		return "markup"
+	case "css", "scss":
+		return "style"
+	case "json":
+		return "json"
+	case "yaml":
+		return "yaml"
+	default:
+		return "code"
+	}
+}
+
+// ruleTemplates holds the pattern/test scaffold per language family; the
+// generic call pattern parses in every code grammar but not in markup or
+// stylesheet grammars.
+var ruleTemplates = map[string]string{
+	"code": `  pattern { yourFunction($$$ARGS) }
+
+  # where    $ARGS matches "..."
+  # fix      "betterFunction($$$ARGS)"
+
+  test {
+    match    "yourFunction(1, 2)"
+    no_match "betterFunction(1, 2)"
+  }
+`,
+	"markup": `  pattern { <yourTag $$$A>$$$C</yourTag> }
+
+  # where    $A matches "..."
+
+  test {
+    match    "<yourTag attr=\"1\">x</yourTag>"
+    no_match "<otherTag>x</otherTag>"
+  }
+`,
+	"style": `  pattern { your-property: $VALUE }
+
+  # where    $VALUE matches "..."
+
+  test {
+    match    "a { your-property: 1px; }"
+    no_match "a { other-property: 1px; }"
+  }
+`,
+	"json": `  pattern { "yourKey": $VALUE }
+
+  # where    $VALUE matches "..."
+
+  test {
+    match    "{\"yourKey\": 1}"
+    no_match "{\"otherKey\": 1}"
+  }
+`,
+	"yaml": `  pattern { yourKey: $VALUE }
+
+  # where    $VALUE matches "..."
+
+  test {
+    match    "yourKey: 1"
+    no_match "otherKey: 1"
+  }
+`,
+}
+
 // --- langs ---------------------------------------------------------------
 
 func newLangsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "langs",
-		Short: "List supported languages and file extensions",
+		Short: "List supported languages, aliases, and file extensions",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			names := make([]string, 0, 16)
 			for _, name := range lang.Names() {
 				l, _ := lang.Get(name)
-				fmt.Printf("%-12s %s\n", name, strings.Join(l.Extensions, " "))
+				display := name
+				if len(l.Aliases) > 0 {
+					display += " (" + strings.Join(l.Aliases, ", ") + ")"
+				}
+				names = append(names, display)
+			}
+			width := 0
+			for _, d := range names {
+				if len(d) > width {
+					width = len(d)
+				}
+			}
+			for i, name := range lang.Names() {
+				l, _ := lang.Get(name)
+				fmt.Printf("%-*s %s\n", width+2, names[i], strings.Join(l.Extensions, " "))
 			}
 			return nil
 		},

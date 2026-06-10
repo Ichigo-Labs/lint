@@ -1,0 +1,26 @@
+rule no-plaintext-http {
+  message  "url `$U` is plaintext http; use https://"
+  severity warning
+  in       yaml
+  note     "An http:// endpoint sends credentials and payloads in the clear, where anyone on the path can read or rewrite them. Point the url at https://."
+
+  pattern { url: $U }
+  where    $U matches "^http://"
+
+  test {
+    match    """
+services:
+  notifier:
+    environment:
+      WEBHOOK:
+        url: http://hooks.example.com/notify
+"""
+    no_match """
+services:
+  notifier:
+    environment:
+      WEBHOOK:
+        url: https://hooks.example.com/notify
+"""
+  }
+}

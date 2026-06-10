@@ -1,0 +1,36 @@
+rule no-latest-tag {
+  message  "image `$IMG` uses the :latest tag; pin a version"
+  severity warning
+  in       yaml
+  note     ":latest is whatever was pushed most recently, so a pod reschedule or compose restart can silently pull a different image than the one you tested. Pin a tag (or digest) instead."
+
+  pattern { image: $IMG }
+  where    $IMG matches ":latest$"
+
+  test {
+    match    """
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          image: nginx:latest
+          ports:
+            - containerPort: 80
+"""
+    no_match """
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.25.3
+          ports:
+            - containerPort: 80
+"""
+  }
+}

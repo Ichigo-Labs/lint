@@ -1,0 +1,18 @@
+rule img-requires-alt {
+  message  "<img> is missing an `alt` attribute"
+  severity warning
+  in       html
+  note     "Screen readers announce the alt text in place of the image. Use alt=\"\" for purely decorative images."
+
+  pattern { <img $$$> }
+  not pattern { <img $$$ alt=$_ $$$> }
+
+  test {
+    match    """
+<img src="cat.png">
+"""
+    no_match """
+<img src="cat.png" alt="A sleeping cat">
+"""
+  }
+}

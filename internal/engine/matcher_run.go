@@ -4,26 +4,100 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/ichigo-labs/lint/internal/dsl"
+	"github.com/ichigo-labs/lint/internal/lang"
 )
 
 // Index is a per-file, pre-order node index shared across all rules checking
 // one parsed tree. Building it once (one walk) lets every single-pattern rule
 // scan only the nodes of its root kind instead of re-walking the whole tree.
+// It also memoizes per-node lookups (kind names, child lists) that every rule
+// would otherwise recompute through cgo. An Index is confined to the single
+// goroutine checking its file; none of this is locked.
 type Index struct {
 	byType map[string][]*sitter.Node // node kind -> nodes, in pre-order
 	all    []*sitter.Node            // every node, in pre-order
+
+	kindBySym map[sitter.Symbol]string   // symbol -> resolved kind name
+	relMemo   map[uintptr][]*sitter.Node // relevantChildren by node ID
+	namedMemo map[uintptr][]*sitter.Node // namedChildren by node ID
 }
 
 // BuildIndex walks a parsed tree once and records its nodes by kind. The
 // pre-order traversal exactly matches walk(), so iterating the index is
 // equivalent to (but cheaper than) re-walking and filtering per rule.
 func BuildIndex(tree *sitter.Tree) *Index {
-	idx := &Index{byType: map[string][]*sitter.Node{}}
+	idx := &Index{
+		byType:    map[string][]*sitter.Node{},
+		kindBySym: map[sitter.Symbol]string{},
+		relMemo:   map[uintptr][]*sitter.Node{},
+		namedMemo: map[uintptr][]*sitter.Node{},
+	}
 	walk(tree.RootNode(), func(n *sitter.Node) {
-		idx.byType[n.Type()] = append(idx.byType[n.Type()], n)
+		k := idx.kind(n)
+		idx.byType[k] = append(idx.byType[k], n)
 		idx.all = append(idx.all, n)
 	})
 	return idx
+}
+
+// kind returns a node's type name, allocating the string only once per
+// distinct grammar symbol. ts_node_type is itself symbol-name resolution on
+// the C side, so caching by symbol is exact.
+func (idx *Index) kind(n *sitter.Node) string {
+	sym := n.Symbol()
+	if k, ok := idx.kindBySym[sym]; ok {
+		return k
+	}
+	k := n.Type()
+	idx.kindBySym[sym] = k
+	return k
+}
+
+// relevant memoizes relevantChildren per node across all of a file's rules,
+// resolving child kinds through the symbol cache so even the first
+// computation allocates no kind strings.
+func (idx *Index) relevant(n *sitter.Node, l *lang.Language) []*sitter.Node {
+	id := n.ID()
+	if kids, ok := idx.relMemo[id]; ok {
+		return kids
+	}
+	count := int(n.ChildCount())
+	out := make([]*sitter.Node, 0, count)
+	for i := 0; i < count; i++ {
+		c := n.Child(i)
+		if c == nil || c.IsExtra() || c.IsMissing() {
+			continue
+		}
+		k := idx.kind(c)
+		if l.IsComment(k) || terminatorKinds[k] {
+			continue
+		}
+		out = append(out, c)
+	}
+	idx.relMemo[id] = out
+	return out
+}
+
+// named memoizes namedChildren per node across all of a file's rules.
+func (idx *Index) named(n *sitter.Node, l *lang.Language) []*sitter.Node {
+	id := n.ID()
+	if kids, ok := idx.namedMemo[id]; ok {
+		return kids
+	}
+	count := int(n.NamedChildCount())
+	out := make([]*sitter.Node, 0, count)
+	for i := 0; i < count; i++ {
+		c := n.NamedChild(i)
+		if c == nil || c.IsExtra() || c.IsMissing() {
+			continue
+		}
+		if l.IsComment(idx.kind(c)) {
+			continue
+		}
+		out = append(out, c)
+	}
+	idx.namedMemo[id] = out
+	return out
 }
 
 // find produces all candidate matches for a matcher across a tree. Only
@@ -133,13 +207,17 @@ func (cm *compiledMatcher) firstPositive() *compiledMatcher {
 
 func (cm *compiledMatcher) findSingle(ctx *matchCtx, root *sitter.Node) []Match {
 	ctx.pat = cm.pattern
-	want := cm.pattern.root.Type()
+	want := cm.pattern.kind(cm.pattern.root)
 	_, rootIsMeta := cm.pattern.metaOf(cm.pattern.root)
 	var out []Match
 	visit := func(n *sitter.Node) {
-		if !rootIsMeta && n.Type() != want {
+		if !rootIsMeta && ctx.tkind(n) != want {
 			return
 		}
+		// Each candidate starts a fresh top-level match, so the binding
+		// journal from previous candidates can be dropped (it only exists to
+		// roll back failed branches within one match attempt).
+		ctx.undo = ctx.undo[:0]
 		b := Bindings{}
 		if ctx.matchNode(cm.pattern.root, n, b) {
 			out = append(out, mkMatch(n, b))
@@ -164,8 +242,9 @@ func (cm *compiledMatcher) findSeq(ctx *matchCtx, root *sitter.Node) []Match {
 		if n.NamedChildCount() == 0 {
 			return
 		}
-		kids := namedChildren(n, ctx.l)
+		kids := ctx.tnamed(n)
 		for s := 0; s < len(kids); s++ {
+			ctx.undo = ctx.undo[:0] // fresh top-level attempt; see findSingle
 			b := Bindings{}
 			consumed, ok := ctx.matchPrefix(cm.pattern.seq, kids[s:], b)
 			if ok && consumed > 0 {
@@ -183,6 +262,36 @@ func (cm *compiledMatcher) findSeq(ctx *matchCtx, root *sitter.Node) []Match {
 		}
 	}
 	if ctx.index != nil {
+		// Only nodes that parent an instance of the first element's kind can
+		// host the sequence, so scan those instead of every node. When the
+		// first element is (or unwraps from) a transparent wrapper, the
+		// matching target child may carry the wrapper or not, so both the
+		// parent and the transparent grandparent are candidates.
+		first := cm.pattern.unwrapForVariadic(cm.pattern.seq[0])
+		if _, isMeta := cm.pattern.metaOf(first); !isMeta {
+			core := unwrapTransparent(cm.pattern.seq[0], cm.pattern.lang)
+			seenParents := map[uintptr]bool{}
+			addHost := func(h *sitter.Node) {
+				if h == nil || seenParents[h.ID()] {
+					return
+				}
+				seenParents[h.ID()] = true
+				visit(h)
+			}
+			for _, n := range ctx.index.byType[cm.pattern.kind(core)] {
+				// Ascend through every transparent ancestor: the sequence host
+				// is the first non-transparent one, and wrappers can stack
+				// (C# wraps top-level statements as
+				// global_statement(expression_statement(…))).
+				for p := n.Parent(); p != nil; p = p.Parent() {
+					addHost(p)
+					if !isTransparent(ctx.tkind(p), ctx.l) {
+						break
+					}
+				}
+			}
+			return out
+		}
 		for _, n := range ctx.index.all {
 			visit(n)
 		}
@@ -199,7 +308,7 @@ func (cm *compiledMatcher) matchesNode(ctx *matchCtx, n *sitter.Node, seed Bindi
 	case dsl.MatchPattern:
 		ctx.pat = cm.pattern
 		if cm.pattern.isSeq {
-			kids := namedChildren(n, ctx.l)
+			kids := ctx.tnamed(n)
 			for s := 0; s < len(kids); s++ {
 				b := seed.clone()
 				if consumed, ok := ctx.matchPrefix(cm.pattern.seq, kids[s:], b); ok && consumed > 0 {
@@ -211,6 +320,17 @@ func (cm *compiledMatcher) matchesNode(ctx *matchCtx, n *sitter.Node, seed Bindi
 		b := seed.clone()
 		if ctx.matchNode(cm.pattern.root, n, b) {
 			return b, true
+		}
+		// An open-tag pattern compiles to the start tag, but relation targets
+		// (ancestors, parents) are elements; accept an element whose start
+		// tag matches, so `inside { <form $$$> }` behaves as written.
+		if startTagKinds[cm.pattern.kind(cm.pattern.root)] && elementKinds[ctx.tkind(n)] {
+			if kids := ctx.trel(n); len(kids) > 0 {
+				b2 := seed.clone()
+				if ctx.matchNode(cm.pattern.root, kids[0], b2) {
+					return b2, true
+				}
+			}
 		}
 		return nil, false
 	case dsl.MatchQuery:
