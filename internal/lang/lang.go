@@ -11,22 +11,25 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/c"
-	"github.com/smacker/go-tree-sitter/cpp"
-	"github.com/smacker/go-tree-sitter/csharp"
 	"github.com/smacker/go-tree-sitter/css"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/html"
 	"github.com/smacker/go-tree-sitter/java"
-	"github.com/smacker/go-tree-sitter/kotlin"
 	"github.com/smacker/go-tree-sitter/python"
-	"github.com/smacker/go-tree-sitter/rust"
-	"github.com/smacker/go-tree-sitter/swift"
-	tsx "github.com/smacker/go-tree-sitter/typescript/tsx"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
 
+	// The seven largest grammars are vendored with their parse tables
+	// stored compressed and inflated on first use, which keeps ~17 MB of
+	// table data out of the binary. See internal/grammars/gen.
+	"github.com/ichigo-labs/lint/internal/grammars/cpp"
+	"github.com/ichigo-labs/lint/internal/grammars/csharp"
 	"github.com/ichigo-labs/lint/internal/grammars/json"
+	"github.com/ichigo-labs/lint/internal/grammars/kotlin"
+	"github.com/ichigo-labs/lint/internal/grammars/rust"
 	"github.com/ichigo-labs/lint/internal/grammars/scss"
+	"github.com/ichigo-labs/lint/internal/grammars/swift"
+	"github.com/ichigo-labs/lint/internal/grammars/tsx"
+	"github.com/ichigo-labs/lint/internal/grammars/typescript"
 	"github.com/ichigo-labs/lint/internal/grammars/xml"
 )
 
