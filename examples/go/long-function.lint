@@ -1,0 +1,89 @@
+rule long-function {
+  message  "function $NAME is over 60 lines; consider splitting it"
+  severity info
+  in       go
+  tags     style
+  note     "Long functions hide structure. Extract cohesive blocks into named helpers."
+
+  # `lines` bounds how many source lines a capture spans; the implicit $match
+  # is the whole function here. `report` points the finding at the name
+  # instead of underlining all 60+ lines.
+  query  "(function_declaration name: (identifier) @NAME) @match"
+  where  $match lines > 60
+  report $NAME
+
+  test {
+    no_match """
+package p
+func small() {
+	a()
+	b()
+}
+"""
+    match """
+package p
+func huge() {
+	x0 := 0; _ = x0
+	x1 := 0; _ = x1
+	x2 := 0; _ = x2
+	x3 := 0; _ = x3
+	x4 := 0; _ = x4
+	x5 := 0; _ = x5
+	x6 := 0; _ = x6
+	x7 := 0; _ = x7
+	x8 := 0; _ = x8
+	x9 := 0; _ = x9
+	y0 := 0; _ = y0
+	y1 := 0; _ = y1
+	y2 := 0; _ = y2
+	y3 := 0; _ = y3
+	y4 := 0; _ = y4
+	y5 := 0; _ = y5
+	y6 := 0; _ = y6
+	y7 := 0; _ = y7
+	y8 := 0; _ = y8
+	y9 := 0; _ = y9
+	z0 := 0; _ = z0
+	z1 := 0; _ = z1
+	z2 := 0; _ = z2
+	z3 := 0; _ = z3
+	z4 := 0; _ = z4
+	z5 := 0; _ = z5
+	z6 := 0; _ = z6
+	z7 := 0; _ = z7
+	z8 := 0; _ = z8
+	z9 := 0; _ = z9
+	w0 := 0; _ = w0
+	w1 := 0; _ = w1
+	w2 := 0; _ = w2
+	w3 := 0; _ = w3
+	w4 := 0; _ = w4
+	w5 := 0; _ = w5
+	w6 := 0; _ = w6
+	w7 := 0; _ = w7
+	w8 := 0; _ = w8
+	w9 := 0; _ = w9
+	v0 := 0; _ = v0
+	v1 := 0; _ = v1
+	v2 := 0; _ = v2
+	v3 := 0; _ = v3
+	v4 := 0; _ = v4
+	v5 := 0; _ = v5
+	v6 := 0; _ = v6
+	v7 := 0; _ = v7
+	v8 := 0; _ = v8
+	v9 := 0; _ = v9
+	u0 := 0; _ = u0
+	u1 := 0; _ = u1
+	u2 := 0; _ = u2
+	u3 := 0; _ = u3
+	u4 := 0; _ = u4
+	u5 := 0; _ = u5
+	u6 := 0; _ = u6
+	u7 := 0; _ = u7
+	u8 := 0; _ = u8
+	u9 := 0; _ = u9
+}
+"""
+  }
+}

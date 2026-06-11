@@ -39,30 +39,8 @@ func Apply(findings []engine.Finding, sources map[string][]byte) (Result, error)
 			}
 			src = b
 		}
-		// Apply from the end of the file backwards so earlier offsets stay valid.
-		sort.Slice(fs, func(i, j int) bool { return fs[i].StartByte > fs[j].StartByte })
-
-		out := append([]byte(nil), src...)
-		lastStart := uint32(len(src) + 1)
-		applied := 0
-		for _, f := range fs {
-			if f.EndByte > lastStart { // overlaps a fix we already applied
-				res.Skipped++
-				continue
-			}
-			if int(f.EndByte) > len(out) {
-				res.Skipped++
-				continue
-			}
-			repl := []byte(*f.Fix)
-			newOut := make([]byte, 0, len(out)-int(f.EndByte-f.StartByte)+len(repl))
-			newOut = append(newOut, out[:f.StartByte]...)
-			newOut = append(newOut, repl...)
-			newOut = append(newOut, out[f.EndByte:]...)
-			out = newOut
-			lastStart = f.StartByte
-			applied++
-		}
+		out, applied, skipped := ApplyBytes(src, fs)
+		res.Skipped += skipped
 		if applied > 0 {
 			info, err := os.Stat(file)
 			mode := os.FileMode(0644)
@@ -77,4 +55,39 @@ func Apply(findings []engine.Finding, sources map[string][]byte) (Result, error)
 		}
 	}
 	return res, nil
+}
+
+// ApplyBytes applies the fixes of one file's findings to its source bytes,
+// returning the rewritten bytes plus how many fixes were applied and how many
+// were skipped (overlap with an already-applied fix). Findings without a fix
+// are ignored. The input slice's order is not preserved.
+func ApplyBytes(src []byte, fs []engine.Finding) ([]byte, int, int) {
+	// Apply from the end of the file backwards so earlier offsets stay valid.
+	sort.Slice(fs, func(i, j int) bool { return fs[i].StartByte > fs[j].StartByte })
+
+	out := append([]byte(nil), src...)
+	lastStart := uint32(len(src) + 1)
+	applied, skipped := 0, 0
+	for _, f := range fs {
+		if f.Fix == nil {
+			continue
+		}
+		if f.EndByte > lastStart { // overlaps a fix we already applied
+			skipped++
+			continue
+		}
+		if int(f.EndByte) > len(out) {
+			skipped++
+			continue
+		}
+		repl := []byte(*f.Fix)
+		newOut := make([]byte, 0, len(out)-int(f.EndByte-f.StartByte)+len(repl))
+		newOut = append(newOut, out[:f.StartByte]...)
+		newOut = append(newOut, repl...)
+		newOut = append(newOut, out[f.EndByte:]...)
+		out = newOut
+		lastStart = f.StartByte
+		applied++
+	}
+	return out, applied, skipped
 }

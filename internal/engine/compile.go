@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	sitter "github.com/smacker/go-tree-sitter"
 
@@ -58,6 +59,10 @@ type CompiledRule struct {
 	URL      string
 	Tags     []string
 	Fix      *string
+
+	// Report, when non-empty, names the capture whose node becomes the
+	// finding's span (and the span Fix replaces) instead of the whole match.
+	Report string
 
 	// Paths/ExcludePaths are file-path globs scoping the rule (empty = all).
 	Paths        []string
@@ -117,6 +122,10 @@ type compiledConstraint struct {
 	// name; kindOK is false when no node of the language can have that kind.
 	kindSym uint16
 	kindOK  bool
+
+	// kindSet holds the canonical symbols for a `kind in [...]` membership
+	// constraint (kind names unknown to the language are simply absent).
+	kindSet map[uint16]bool
 }
 
 type compiledRelation struct {
@@ -136,6 +145,7 @@ func Compile(r *dsl.Rule) (*CompiledRule, error) {
 		URL:          r.URL,
 		Tags:         r.Tags,
 		Fix:          r.Fix,
+		Report:       r.Report,
 		Paths:        r.Paths,
 		ExcludePaths: r.ExcludePaths,
 		byLang:       map[string]*langRule{},
@@ -213,7 +223,44 @@ func compileForLang(l *lang.Language, r *dsl.Rule) (*langRule, error) {
 			}
 		}
 	}
+	if r.Report != "" {
+		names := map[string]bool{"match": true}
+		captureNames(root, names)
+		for _, crel := range lr.relations {
+			if isPositiveRelation(crel.kind) {
+				captureNames(crel.matcher, names)
+			}
+		}
+		if !names[r.Report] {
+			return nil, fmt.Errorf("report $%s: no pattern, query, or relation captures $%s", r.Report, r.Report)
+		}
+	}
 	return lr, nil
+}
+
+// captureNames collects the metavariable/capture names a matcher tree can
+// bind. Bindings made inside a `not` are discarded on match, so its subtree
+// is skipped.
+func captureNames(cm *compiledMatcher, set map[string]bool) {
+	switch cm.kind {
+	case dsl.MatchPattern:
+		for _, spec := range cm.pattern.metas {
+			if spec.name != "" {
+				set[spec.name] = true
+			}
+		}
+		for _, spec := range cm.pattern.opMetas {
+			set[spec.name] = true
+		}
+	case dsl.MatchQuery:
+		for i := uint32(0); i < cm.query.CaptureCount(); i++ {
+			set[cm.query.CaptureNameForId(i)] = true
+		}
+	case dsl.MatchAll, dsl.MatchAny:
+		for _, ch := range cm.children {
+			captureNames(ch, set)
+		}
+	}
 }
 
 // isPositiveRelation reports whether a relation asserts presence (its matcher
@@ -221,7 +268,8 @@ func compileForLang(l *lang.Language, r *dsl.Rule) (*langRule, error) {
 func isPositiveRelation(k dsl.RelationKind) bool {
 	switch k {
 	case dsl.RelInside, dsl.RelHas, dsl.RelPrecedes, dsl.RelFollows,
-		dsl.RelDirectlyInside, dsl.RelDirectlyHas:
+		dsl.RelDirectlyInside, dsl.RelDirectlyHas,
+		dsl.RelDirectlyPrecedes, dsl.RelDirectlyFollows:
 		return true
 	}
 	return false
@@ -327,6 +375,13 @@ func compileConstraint(l *lang.Language, c dsl.Constraint) (compiledConstraint, 
 	switch c.Kind {
 	case dsl.ConKind, dsl.ConNotKind:
 		cc.kindSym, cc.kindOK = symsFor(l).canonForKind(c.Text)
+	case dsl.ConKindIn, dsl.ConNotKindIn:
+		cc.kindSet = map[uint16]bool{}
+		for _, name := range c.List {
+			if sym, ok := symsFor(l).canonForKind(name); ok {
+				cc.kindSet[sym] = true
+			}
+		}
 	case dsl.ConRegex, dsl.ConNotRegex:
 		re, err := regexp.Compile(c.Text)
 		if err != nil {
@@ -354,7 +409,11 @@ func compileConstraint(l *lang.Language, c dsl.Constraint) (compiledConstraint, 
 		}
 	case dsl.ConNumGt, dsl.ConNumGe, dsl.ConNumLt, dsl.ConNumLe,
 		dsl.ConCountGt, dsl.ConCountGe, dsl.ConCountLt, dsl.ConCountLe,
-		dsl.ConCountEq, dsl.ConCountNe:
+		dsl.ConCountEq, dsl.ConCountNe,
+		dsl.ConLenGt, dsl.ConLenGe, dsl.ConLenLt, dsl.ConLenLe,
+		dsl.ConLenEq, dsl.ConLenNe,
+		dsl.ConLinesGt, dsl.ConLinesGe, dsl.ConLinesLt, dsl.ConLinesLe,
+		dsl.ConLinesEq, dsl.ConLinesNe:
 		n, err := strconv.ParseFloat(c.Text, 64)
 		if err != nil {
 			return cc, fmt.Errorf("invalid number %q in where constraint: %w", c.Text, err)
@@ -413,6 +472,15 @@ func (r *CompiledRule) RunIndexed(l *lang.Language, tree *sitter.Tree, src []byt
 		}
 		if !lr.passesConstraints(ctx, b) {
 			continue
+		}
+		// `report $X` narrows the finding (and fix) span to that capture's
+		// node. A capture with no single node (a variadic) keeps the full span.
+		if r.Report != "" {
+			if bv, ok := b[r.Report]; ok && bv.Node != noNode {
+				m.Node = bv.Node
+				m.StartByte, m.EndByte = idx.f.StartByte[bv.Node], idx.f.EndByte[bv.Node]
+				m.StartPoint, m.EndPoint = idx.startPoint(bv.Node), idx.endPoint(bv.Node)
+			}
 		}
 		key := [2]uint32{m.StartByte, m.EndByte}
 		if seen[key] {
@@ -511,23 +579,43 @@ func (lr *langRule) passesRelations(ctx *matchCtx, m Match, b Bindings) bool {
 				return false
 			}
 		case dsl.RelPrecedes:
-			ok, nb := matchSibling(ctx, rel.matcher, m.Node, b, true)
+			ok, nb := matchSibling(ctx, rel.matcher, m.Node, b, true, false)
 			if !ok {
 				return false
 			}
 			b.merge(nb)
 		case dsl.RelNotPrecedes:
-			if ok, _ := matchSibling(ctx, rel.matcher, m.Node, b, true); ok {
+			if ok, _ := matchSibling(ctx, rel.matcher, m.Node, b, true, false); ok {
 				return false
 			}
 		case dsl.RelFollows:
-			ok, nb := matchSibling(ctx, rel.matcher, m.Node, b, false)
+			ok, nb := matchSibling(ctx, rel.matcher, m.Node, b, false, false)
 			if !ok {
 				return false
 			}
 			b.merge(nb)
 		case dsl.RelNotFollows:
-			if ok, _ := matchSibling(ctx, rel.matcher, m.Node, b, false); ok {
+			if ok, _ := matchSibling(ctx, rel.matcher, m.Node, b, false, false); ok {
+				return false
+			}
+		case dsl.RelDirectlyPrecedes:
+			ok, nb := matchSibling(ctx, rel.matcher, m.Node, b, true, true)
+			if !ok {
+				return false
+			}
+			b.merge(nb)
+		case dsl.RelNotDirectlyPrecedes:
+			if ok, _ := matchSibling(ctx, rel.matcher, m.Node, b, true, true); ok {
+				return false
+			}
+		case dsl.RelDirectlyFollows:
+			ok, nb := matchSibling(ctx, rel.matcher, m.Node, b, false, true)
+			if !ok {
+				return false
+			}
+			b.merge(nb)
+		case dsl.RelNotDirectlyFollows:
+			if ok, _ := matchSibling(ctx, rel.matcher, m.Node, b, false, true); ok {
 				return false
 			}
 		case dsl.RelDirectlyInside:
@@ -556,12 +644,13 @@ func (lr *langRule) passesRelations(ctx *matchCtx, m Match, b Bindings) bool {
 }
 
 // matchSibling looks for a sibling of the candidate's statement, on the given
-// side (before=earlier, else later), that the matcher accepts. It scopes the
+// side (before=earlier, else later), that the matcher accepts; with adjacent
+// set, only the immediately-neighboring sibling is considered. It scopes the
 // search to the candidate's lowest enclosing block: it finds the ancestor whose
 // parent is a block and compares that ancestor's siblings there. This looks
 // through statement wrappers (a call inside an expression_statement reaches its
 // block) without spilling into outer blocks.
-func matchSibling(ctx *matchCtx, cm *compiledMatcher, n int32, seed Bindings, before bool) (bool, Bindings) {
+func matchSibling(ctx *matchCtx, cm *compiledMatcher, n int32, seed Bindings, before, adjacent bool) (bool, Bindings) {
 	stmt, block := enclosingStatement(ctx.ix, n)
 	if block == noNode {
 		return false, nil
@@ -577,17 +666,16 @@ func matchSibling(ctx *matchCtx, cm *compiledMatcher, n int32, seed Bindings, be
 	if idx < 0 {
 		return false, nil
 	}
+	lo, hi, step := idx+1, len(sibs)-1, 1
 	if before {
-		for i := idx - 1; i >= 0; i-- {
-			if nb, ok := cm.matchesNode(ctx, sibs[i], seed); ok {
-				return true, nb
-			}
+		lo, hi, step = idx-1, 0, -1
+	}
+	for i := lo; (step > 0 && i <= hi) || (step < 0 && i >= hi); i += step {
+		if nb, ok := cm.matchesNode(ctx, sibs[i], seed); ok {
+			return true, nb
 		}
-	} else {
-		for i := idx + 1; i < len(sibs); i++ {
-			if nb, ok := cm.matchesNode(ctx, sibs[i], seed); ok {
-				return true, nb
-			}
+		if adjacent {
+			break
 		}
 	}
 	return false, nil
@@ -692,6 +780,10 @@ func (c compiledConstraint) eval(ctx *matchCtx, b Bindings) bool {
 		return bv.Node != noNode && c.kindOK && ctx.ix.csym[bv.Node] == c.kindSym
 	case dsl.ConNotKind:
 		return bv.Node == noNode || !c.kindOK || ctx.ix.csym[bv.Node] != c.kindSym
+	case dsl.ConKindIn:
+		return bv.Node != noNode && c.kindSet[ctx.ix.csym[bv.Node]]
+	case dsl.ConNotKindIn:
+		return bv.Node == noNode || !c.kindSet[ctx.ix.csym[bv.Node]]
 	case dsl.ConIn:
 		return c.set[bv.Text]
 	case dsl.ConNotIn:
@@ -733,24 +825,39 @@ func (c compiledConstraint) eval(ctx *matchCtx, b Bindings) bool {
 			n = bv.Count
 		}
 		return cmpNum(c.kind, float64(n), c.num)
+	case dsl.ConLenGt, dsl.ConLenGe, dsl.ConLenLt, dsl.ConLenLe,
+		dsl.ConLenEq, dsl.ConLenNe:
+		return cmpNum(c.kind, float64(utf8.RuneCountInString(bv.Text)), c.num)
+	case dsl.ConLinesGt, dsl.ConLinesGe, dsl.ConLinesLt, dsl.ConLinesLe,
+		dsl.ConLinesEq, dsl.ConLinesNe:
+		return cmpNum(c.kind, float64(lineCount(bv.Text)), c.num)
 	}
 	return false
 }
 
-// cmpNum applies a numeric/count comparison constraint.
+// lineCount returns the number of source lines a capture spans (0 for an
+// empty capture, e.g. a variadic that absorbed nothing).
+func lineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+// cmpNum applies a numeric/count/length/lines comparison constraint.
 func cmpNum(kind dsl.ConstraintKind, a, b float64) bool {
 	switch kind {
-	case dsl.ConNumGt, dsl.ConCountGt:
+	case dsl.ConNumGt, dsl.ConCountGt, dsl.ConLenGt, dsl.ConLinesGt:
 		return a > b
-	case dsl.ConNumGe, dsl.ConCountGe:
+	case dsl.ConNumGe, dsl.ConCountGe, dsl.ConLenGe, dsl.ConLinesGe:
 		return a >= b
-	case dsl.ConNumLt, dsl.ConCountLt:
+	case dsl.ConNumLt, dsl.ConCountLt, dsl.ConLenLt, dsl.ConLinesLt:
 		return a < b
-	case dsl.ConNumLe, dsl.ConCountLe:
+	case dsl.ConNumLe, dsl.ConCountLe, dsl.ConLenLe, dsl.ConLinesLe:
 		return a <= b
-	case dsl.ConCountEq:
+	case dsl.ConCountEq, dsl.ConLenEq, dsl.ConLinesEq:
 		return a == b
-	case dsl.ConCountNe:
+	case dsl.ConCountNe, dsl.ConLenNe, dsl.ConLinesNe:
 		return a != b
 	}
 	return false

@@ -109,14 +109,15 @@ lint version                       # print version, commit, and build info
 | Structural matching | Patterns match the AST, so whitespace/comments don't, but operators do |
 | One DSL, many languages | The same `.lint` syntax targets all supported languages |
 | Metavariables | `$NAME` (named, back-referencing), `$_` (wildcard), `$$$NAME` (variadic), `$OP` (operator), implicit `$match` |
-| `where` predicates | Constrain captures by regex, node kind, membership, equality, **numeric** bounds, variadic **`count`**, a sub-pattern, or **boolean `any`/`all` groups** |
-| `let` definitions | Name a list/regex once (`let DEBUG = [...]`) and reuse it as `@DEBUG` across rules |
-| Structural context | `inside` / `has`, ordering `precedes` / `follows`, depth-1 `directly inside` / `directly has` (each with `not`) |
+| `where` predicates | Constrain captures by regex, node kind (single or `kind in [...]`), membership, equality, **numeric** bounds, variadic **`count`**, text **`length`** / spanned **`lines`**, a sub-pattern, or **boolean `any`/`all` groups** |
+| `let` definitions | Name a list, regex, or whole matcher once (`let DEBUG = [...]`) and reuse it as `@DEBUG` across rules |
+| Structural context | `inside` / `has`, ordering `precedes` / `follows`, depth-1 `directly inside` / `directly has`, adjacency `directly precedes` / `directly follows` (each with `not`) |
 | `any` / `all` / `not` | Combine matchers with boolean logic, including branch-scoped `where` predicates inside `any` / `all` |
 | Raw queries | Drop to a Tree-sitter s-expression `query "..."` when patterns aren't enough |
 | Path scoping | Limit a rule to files via `paths` / `exclude` globs (`*`, `?`, `**`) |
+| Focused findings | `report $NAME` narrows the finding (and fix) span to one capture |
 | Autofix | `fix "..."` templates rewritten by `lint check --fix` |
-| Inline tests | `test { match ... no_match ... }` run by `lint test` |
+| Inline tests | `test { match ... no_match ... }` run by `lint test`, including `fix` output assertions |
 | Suppression | `// lint:ignore [rule]` and `// lint:ignore-next-line` comments silence findings |
 | Project config | `.lint.toml` disables rules or overrides severity per project |
 | Severities & tags | `error`/`warning`/`info`; `url`/`tags` metadata; `--tag`, `--quiet`, `--error-on-warning` |

@@ -74,6 +74,10 @@ func newTestCmd() *cobra.Command {
 }
 
 func describeCase(cr runner.CaseResult) string {
+	if cr.FixMismatch {
+		return fmt.Sprintf("fix output mismatch\n  --- want ---\n%s\n  --- got ----\n%s",
+			indentLines(cr.FixWant, "  "), indentLines(cr.FixGot, "  "))
+	}
 	switch cr.Expect {
 	case dsl.ExpectMatch:
 		if cr.Want >= 0 {
@@ -83,6 +87,15 @@ func describeCase(cr runner.CaseResult) string {
 	default:
 		return fmt.Sprintf("expected no match, got %d", cr.Got)
 	}
+}
+
+// indentLines prefixes every line of s with the given indent.
+func indentLines(s, indent string) string {
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		lines[i] = indent + ln
+	}
+	return strings.Join(lines, "\n")
 }
 
 // --- list ----------------------------------------------------------------

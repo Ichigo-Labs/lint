@@ -11,14 +11,15 @@ This document is the complete reference. For a task-oriented walkthrough, see
 - [Strings and bodies](#strings-and-bodies)
 - [Rule fields](#rule-fields)
 - [Metavariables](#metavariables) — including [operator metavariables](#operator-metavariables)
-- [`let` definitions](#let-definitions)
+- [`let` definitions](#let-definitions) — lists, regexes, and reusable matchers
 - [How matching works](#how-matching-works)
-- [Matcher clauses](#matcher-clauses) — `pattern`, `query`, `any`, `all`, `not`
+- [Matcher clauses](#matcher-clauses) — `pattern`, `query`, `any`, `all`, `not`, `@NAME`
 - [Relation clauses](#relation-clauses) — `inside`, `has`, `precedes`, `follows`, `directly`, and negations
-- [`where` constraints](#where-constraints) — regex, kind, membership, numeric, `count`, sub-pattern, boolean `any`/`all` groups
+- [`where` constraints](#where-constraints) — regex, kind, membership, numeric, `count`, `length`, `lines`, sub-pattern, boolean `any`/`all` groups
+- [`report`](#report) — narrowing the finding span to one capture
 - [Path scoping](#path-scoping) — `paths` / `exclude` globs
 - [`fix`](#fix)
-- [`test`](#test)
+- [`test`](#test) — including [fix assertions](#fix-assertions)
 - [Severity and exit codes](#severity-and-exit-codes)
 - [Suppressing findings](#suppressing-findings)
 - [Project configuration](#project-configuration)
@@ -92,6 +93,7 @@ is exactly the pattern `foo()`.
 | `tags` | `tag` | Comma-separated free-form labels, e.g. `tags security, correctness`. Surfaced in `--json` and selectable with `lint check --tag`. |
 | `paths` | `path` | Comma-separated (or bracketed) string globs restricting the rule to matching files, e.g. `paths "src/components/**"`. See [Path scoping](#path-scoping). |
 | `exclude` | `excludePaths` | String globs removing files from the rule even when they match `paths`, e.g. `exclude "**/*.test.ts"`. |
+| `report` | `focus` | A captured metavariable (e.g. `report $NAME`) whose node becomes the finding's span — and the span a `fix` replaces — instead of the whole match. See [`report`](#report). |
 
 `message` and `note` expand `$NAME` / `$$$NAME` placeholders using the rule's
 captured metavariables. For example, with `pattern { fmt.$M($$$) }`:
@@ -149,9 +151,9 @@ Only **named** metavariables produce bindings usable in `message`, `note`,
 
 ## `let` definitions
 
-A file may define named, reusable lists and regexes with `let`, then reference
-them as `@NAME` in a `where` clause. Definitions are **file-scoped** (visible to
-every rule in the file) and may appear at the top of the file or between rules:
+A file may define named, reusable lists, regexes, and matchers with `let`, then
+reference them as `@NAME`. Definitions are **file-scoped** (visible to every
+rule in the file) and may appear at the top of the file or between rules:
 
 ```
 let DEBUG = [Println, Printf, Print]
@@ -174,6 +176,37 @@ A `[ ... ]` definition can only be used with `in` (and `not in`); a `"..."`
 definition only with `matches` (and `not matches`). Referencing an undefined or
 wrong-typed name is a parse error. References are resolved at parse time, so a
 `let` is pure sugar — the engine sees an ordinary `in`/`matches` constraint.
+
+### `let` matchers
+
+A `let` may also name a whole **matcher** — a `pattern`, `query`, `any`, `all`,
+or `not` expression. The reference `@NAME` then works anywhere a matcher is
+expected: as a rule's matcher, inside `any`/`all`, after a relation keyword
+(`inside @NAME`), or on the right side of `where $X is`:
+
+```
+let TESTFN = pattern { func $_($_ *testing.T) { $$$ } }
+let SLEEPS = any {
+  pattern { time.Sleep($$$) }
+  pattern { time.After($$$) }
+}
+
+rule no-sleep-in-test {
+  in      go
+  @SLEEPS
+  inside  @TESTFN
+}
+
+rule no-sleep-in-helper {
+  in      go
+  @SLEEPS
+  inside pattern { func $H($$$) { $$$ } }
+  where  $H matches "(?i)helper"
+}
+```
+
+Like list/regex `let`s, matcher `let`s are resolved at parse time — each
+referencing rule compiles its own copy.
 
 ## How matching works
 
@@ -213,7 +246,8 @@ of them, sharing bindings. (To require two *separate* pieces of code, use the
 
 ## Matcher clauses
 
-A rule needs at least one positive matcher.
+A rule needs at least one positive matcher. Anywhere a matcher is expected, a
+`@NAME` reference to a [`let` matcher](#let-matchers) is also accepted.
 
 ### `pattern { ... }`
 
@@ -510,6 +544,33 @@ rule operand-of-plus {
 }
 ```
 
+### `directly precedes` / `directly follows` (and negations)
+
+The adjacent forms of `precedes` / `follows`: only the **immediately**
+neighboring statement in the same block is tested, instead of any earlier/later
+sibling. Like the unbounded forms, they share bindings with the candidate:
+
+```
+rule redundant-reassign {
+  message "the same value is assigned to $X twice in a row"
+  in      go
+  pattern { $X = $V }
+  directly follows pattern { $X = $V }   # the very next statement repeats it
+}
+```
+
+`not directly precedes` / `not directly follows` negate — useful for "must be
+immediately followed by" checks such as a lock that isn't followed by a
+`defer`d unlock:
+
+```
+rule lock-without-deferred-unlock {
+  in      go
+  pattern { $MU.Lock() }
+  not directly follows pattern { defer $MU.Unlock() }
+}
+```
+
 ## `where` constraints
 
 `where` adds a predicate over a **captured** metavariable. Multiple `where`
@@ -522,6 +583,8 @@ to never fire on that candidate, so only constrain names you actually capture.
 | `$X not matches "re"` | it does not match the regex |
 | `$X kind <node_type>` | the captured node's Tree-sitter kind equals `node_type` |
 | `$X not kind <node_type>` | the kind differs (or there is no node, e.g. a variadic) |
+| `$X kind in [a, b]` | the node's kind is one of the listed kinds (also `kind in @NAME`) |
+| `$X not kind in [a, b]` | the kind is none of them (or there is no node) |
 | `$X in [a, b, "c"]` | the text equals one of the listed items |
 | `$X not in [...]` | the text is none of them |
 | `$X in @NAME` | the text is in a `let` list (`not in @NAME` negates) |
@@ -532,6 +595,8 @@ to never fire on that candidate, so only constrain names you actually capture.
 | `$X != "lit"` | the text differs from the literal |
 | `$X > n` / `>= n` / `< n` / `<= n` | the capture parses as a number satisfying the bound (a non-numeric capture never matches) |
 | `$X count > n` (`>= < <= == !=`) | the number of nodes a variadic captured satisfies the bound |
+| `$X length > n` (`>= < <= == !=`) | the capture's text length in characters satisfies the bound |
+| `$X lines > n` (`>= < <= == !=`) | the number of source lines the capture spans satisfies the bound |
 | `$X is pattern { ... }` | the captured subtree (or a descendant) matches the sub-pattern |
 | `$X is not pattern { ... }` | it does not match the sub-pattern |
 | `any { <constraint>... }` | **at least one** child constraint holds (boolean OR) |
@@ -590,6 +655,29 @@ where   $PARAMS count > 4        # functions with more than four parameters
 > Variadics are referenced in `where` with a single `$` (e.g. `$PARAMS`), the
 > same name as the `$$$PARAMS` that captured them.
 
+### `length` and `lines`
+
+`length` compares a capture's **text length in characters** (Unicode code
+points); `lines` compares how many **source lines** the capture spans (an empty
+capture spans 0). Both accept the same six comparison operators as `count`.
+They turn "too long" conventions into rules — combined with the implicit
+`$match`, a query can bound an entire construct:
+
+```
+rule long-function {
+  message "function $NAME is over 50 lines; consider splitting it"
+  in      go
+  query   "(function_declaration name: (identifier) @NAME) @match"
+  where   $match lines > 50
+  report  $NAME
+}
+```
+
+```
+pattern { $LOG.info($MSG) }
+where   $MSG length > 120        # log message too long
+```
+
 ### `matches` / `not matches`
 
 Combine with `kind` to scope a comparison to error sentinels:
@@ -629,7 +717,18 @@ rule print-not-f {
 ### `kind` / `not kind`
 
 `kind` checks the captured node's Tree-sitter type (discover types with
-`lint parse <file>`). Use `not kind` to exclude a shape:
+`lint parse <file>`). Use `not kind` to exclude a shape. To accept **several**
+kinds at once, use `kind in` with a bracketed list (or a `let` list) instead of
+a `where any { ... }` of single kinds:
+
+```
+rule no-literal-arg {
+  message "pass a named constant, not a literal"
+  in      go
+  pattern { retry($N) }
+  where   $N kind in [int_literal, float_literal]
+}
+```
 
 ```
 rule eq-not-selector {
@@ -754,6 +853,48 @@ rule eq-lhs-not-call {
 }
 ```
 
+## `report`
+
+By default a finding's span is the whole matched node (or, for a `query`, the
+`@match` capture). `report $NAME` (alias `focus`) narrows it to one captured
+metavariable, so the squiggle lands on the part that's actually wrong instead
+of a whole declaration:
+
+```
+rule handler-prop-misnamed {
+  message "prop $name holds a handler; name it on*"
+  in      tsx
+  query   "(jsx_attribute (property_identifier) @name (jsx_expression (arrow_function))) @match"
+  where   $name not matches "^on[A-Z]"
+  report  $name                 # underline just the prop name, not the JSX attribute
+}
+```
+
+The capture may come from the rule's own pattern/query or from a positive
+relation's pattern (`inside`, `has`, ...), since relations share bindings.
+Naming a capture that nothing binds is a compile error. A capture with no
+single node — a variadic `$$$NAME`, or a text hole — keeps the full match span.
+
+`report` also moves the span a [`fix`](#fix) replaces, which lets a fix rewrite
+just one part of a larger match — here only the method name, leaving the
+receiver and arguments untouched:
+
+```
+rule deprecated-load {
+  message "$OBJ.$M is deprecated; use fetch"
+  in      typescript
+  pattern { $OBJ.$M($$$) }
+  where   $M in [get, load]
+  report  $M
+  fix     "fetch"               # obj.load(x) becomes obj.fetch(x)
+
+  test {
+    match "obj.load(1);" fix "obj.fetch(1);"
+    no_match "obj.fetch(1);"
+  }
+}
+```
+
 ## Path scoping
 
 By default a rule applies to every file whose language it can parse. The `paths`
@@ -840,6 +981,36 @@ func f() { panic(1); panic(2) }
   }
 }
 ```
+
+### Fix assertions
+
+A `match` entry may also carry a `fix` body asserting what the snippet looks
+like **after** the rule's fixes are applied (compared ignoring surrounding
+whitespace). This makes `fix` templates testable — without it, a fix is only
+exercised when someone runs `--fix` for real:
+
+```
+rule errors-new-sprintf {
+  in      go
+  pattern { errors.New(fmt.Sprintf($$$ARGS)) }
+  fix     "fmt.Errorf($$$ARGS)"
+
+  test {
+    match """
+package p
+func f(n string) error { return errors.New(fmt.Sprintf("bad: %s", n)) }
+""" fix """
+package p
+func f(n string) error { return fmt.Errorf("bad: %s", n) }
+"""
+  }
+}
+```
+
+All of the rule's fixes in the snippet are applied before comparing, and `count`
+and `fix` can be combined (`match "..." count 2 fix "..."`). A `fix` assertion
+on a rule with no `fix` template, or on a `no_match` entry, is a parse error.
+On failure, `lint test` prints the wanted and actual outputs.
 
 Run them:
 

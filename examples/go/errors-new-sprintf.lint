@@ -8,10 +8,16 @@ rule errors-new-sprintf {
   fix     "fmt.Errorf($$$ARGS)"
 
   test {
+    # `fix` after a match snippet asserts the output of applying the rule's fix.
     match    """
 package p
 func f(name string) error {
 	return errors.New(fmt.Sprintf("bad name: %s", name))
+}
+""" fix """
+package p
+func f(name string) error {
+	return fmt.Errorf("bad name: %s", name)
 }
 """
     no_match """

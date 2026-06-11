@@ -32,6 +32,12 @@ type Rule struct {
 	// combination of those. It produces candidate nodes plus metavar bindings.
 	Match *Matcher
 
+	// Report, when non-empty, names a captured metavariable whose node becomes
+	// the finding's span (and the span a `fix` replaces) instead of the whole
+	// match. Falls back to the full match span when the capture has no single
+	// node (e.g. a variadic).
+	Report string
+
 	// Where holds metavariable predicates that every candidate must satisfy.
 	Where []Constraint
 
@@ -56,14 +62,28 @@ type Rule struct {
 	Pos  Position
 }
 
-// LetDef is a file-level `let NAME = ...` definition: either a membership list
-// or a regex, referenced as @NAME in a `where` clause. References are resolved
-// at parse time, so the engine never sees a LetDef.
+// LetDef is a file-level `let NAME = ...` definition: a membership list, a
+// regex, or a reusable matcher, referenced as @NAME in a `where` clause or in
+// matcher position. References are resolved at parse time, so the engine never
+// sees a LetDef.
 type LetDef struct {
 	IsRegex bool
 	Text    string   // regex source (when IsRegex)
-	List    []string // membership items (when !IsRegex)
+	List    []string // membership items (when !IsRegex && Matcher == nil)
+	Matcher *Matcher // reusable matcher (when non-nil)
 	Pos     Position
+}
+
+// what describes the definition's flavor for error messages.
+func (d *LetDef) what() string {
+	switch {
+	case d.Matcher != nil:
+		return "a matcher"
+	case d.IsRegex:
+		return "a regex"
+	default:
+		return "a list"
+	}
 }
 
 // MatcherKind discriminates the Matcher union.
@@ -117,6 +137,11 @@ const (
 	RelNotDirectlyInside // candidate's immediate parent does not match
 	RelDirectlyHas       // candidate has an immediate child matching
 	RelNotDirectlyHas    // candidate has no immediate child matching
+
+	RelDirectlyPrecedes    // the immediately-previous same-block sibling matches
+	RelNotDirectlyPrecedes // the immediately-previous sibling does not match (or none)
+	RelDirectlyFollows     // the immediately-next same-block sibling matches
+	RelNotDirectlyFollows  // the immediately-next sibling does not match (or none)
 )
 
 // Relation is a structural context filter on a candidate node. Inside/Has
@@ -154,6 +179,20 @@ const (
 	ConCountLe                          // $X count <= n
 	ConCountEq                          // $X count == n
 	ConCountNe                          // $X count != n
+	ConLenGt                            // $X length > n   (capture text length in characters)
+	ConLenGe                            // $X length >= n
+	ConLenLt                            // $X length < n
+	ConLenLe                            // $X length <= n
+	ConLenEq                            // $X length == n
+	ConLenNe                            // $X length != n
+	ConLinesGt                          // $X lines > n   (number of source lines the capture spans)
+	ConLinesGe                          // $X lines >= n
+	ConLinesLt                          // $X lines < n
+	ConLinesLe                          // $X lines <= n
+	ConLinesEq                          // $X lines == n
+	ConLinesNe                          // $X lines != n
+	ConKindIn                           // $X kind in [a, b]   (node kind is one of the listed kinds)
+	ConNotKindIn                        // $X not kind in [a, b]
 	ConAny                              // any { <constraint>... } — true if any child holds
 	ConAll                              // all { <constraint>... } — true if every child holds
 )
@@ -188,5 +227,8 @@ type TestCase struct {
 	// Count, when >= 0, asserts an exact number of matches (only meaningful
 	// with ExpectMatch). -1 means "one or more".
 	Count int
+	// Fixed, when non-nil, asserts the snippet after applying the rule's fix
+	// (only meaningful with ExpectMatch; compared ignoring surrounding space).
+	Fixed *string
 	Pos   Position
 }

@@ -197,16 +197,25 @@ model, with a few semantics specific to these grammars:
 
 Start broad with a `pattern`, then subtract false positives:
 
-- **`where`** constrains a capture by text/kind/membership/equality/sub-pattern.
+- **`where`** constrains a capture by text/kind/membership/equality/sub-pattern,
+  plus size bounds: variadic `count`, text `length`, spanned `lines`.
   See the [operator table](dsl.md#where-constraints).
 - **`inside` / `not inside`** filter by an enclosing construct (e.g. only inside a
   `*testing.T` test function; everywhere *except* `main`).
 - **`has` / `not has`** filter by what the candidate contains (e.g. a function
   that allocates but has *no* NULL check).
+- **`directly precedes` / `directly follows`** (and negations) filter by the
+  *adjacent* statement (e.g. a `Lock()` not immediately followed by
+  `defer Unlock()`).
 
 A good rule is usually "one positive matcher + a couple of negative filters."
 The `unchecked-malloc` rule is a textbook case: match any function, require it
 `has` an allocation, and require it does `not has` a NULL guard.
+
+When the matched construct is large (a whole function, a JSX attribute), add
+`report $NAME` to point the finding at the capture that's actually wrong — see
+[`report`](dsl.md#report). Shared shapes can be named once per file with
+`let NAME = pattern { ... }` and reused as `@NAME` in any matcher position.
 
 ## Fixes
 
@@ -219,12 +228,14 @@ fix     "$X is None"
 ```
 
 Apply fixes with `lint check --fix`. Keep fixes behavior-preserving and prefer
-fixing the *smallest* span that makes the change correct. When fixes in one file
-overlap, lint applies the outermost first and skips conflicting ones.
+fixing the *smallest* span that makes the change correct — `report $NAME`
+narrows the replaced span to a single capture when only part of the match
+should change. When fixes in one file overlap, lint applies the outermost first
+and skips conflicting ones.
 
-Test a fix the same way you test matching — a `match` case proves the rule fires;
-combine it with manual `lint check --fix` on a scratch file to eyeball the
-rewrite.
+Test a fix with a [fix assertion](dsl.md#fix-assertions): add `fix "..."` after
+a `match` snippet and `lint test` will apply the rule's fixes and compare the
+result.
 
 ## Tests
 
@@ -241,6 +252,8 @@ Tips:
 
 - Aliases exist: `match`/`bad`/`flag` and `no_match`/`ok`/`good`/`clean`.
 - Add `count N` after a `match` snippet to assert an exact number of hits.
+- Add `fix "..."` after a `match` snippet to assert the snippet after the
+  rule's fixes are applied.
 - Write `no_match` cases for the *near misses* you expect — the lookalikes that a
   naive regex would wrongly flag. That is where structural matching earns its
   keep.

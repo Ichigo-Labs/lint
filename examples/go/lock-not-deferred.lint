@@ -1,0 +1,31 @@
+rule lock-not-deferred {
+  message  "follow $MU.Lock() immediately with `defer $MU.Unlock()`"
+  severity info
+  in       go
+  tags     concurrency
+  note     "Deferring the unlock right after locking guarantees release on every return path (including panics). An unlock further down is easy to skip when the function grows an early return."
+
+  # `directly follows` tests only the immediately-next statement in the block
+  # (the unbounded `follows` would accept an Unlock anywhere later).
+  pattern { $MU.Lock() }
+  not directly follows pattern { defer $MU.Unlock() }
+
+  test {
+    match """
+package p
+func f() {
+	mu.Lock()
+	work()
+	mu.Unlock()
+}
+"""
+    no_match """
+package p
+func f() {
+	mu.Lock()
+	defer mu.Unlock()
+	work()
+}
+"""
+  }
+}
